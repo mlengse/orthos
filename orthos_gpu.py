@@ -2,11 +2,34 @@
 # !pip install numpy numba cupy-cuda12x
 
 import numpy as np
-import cupy as cp
-from numba import cuda, uint8, uint32, int32, float32
 import time
 import sys
 import os
+
+# Check for GPU
+try:
+    import cupy as cp
+    from numba import cuda
+    # Try accessing device to confirm availability
+    try:
+        cp.cuda.Device(0).compute_capability
+        GPU_AVAILABLE = True
+    except Exception as e:
+        print(f"Warning: GPU detected but not accessible ({e}). Switching to CPU/Mock mode.")
+        raise ImportError("Force CPU Mock")
+except ImportError:
+    print("Warning: CuPy/Numba not installed or no GPU. Running in CPU emulation/fail mode.")
+    GPU_AVAILABLE = False
+    # Mocking for local testing/CPU fallback
+    import numpy as cp
+    class MockCuda:
+        def jit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+        def grid(self, n):
+            return 0
+    cuda = MockCuda()
 
 # ==========================================
 # CONSTANTS & CONFIG
@@ -163,7 +186,8 @@ class OrthosGPU:
         self.trie_root = 1
 
         self.initialize_chars()
-        self.init_pattern_trie()
+        # Trie init deferred until after char collection
+        # self.init_pattern_trie()
 
         # Data
         self.words = None
@@ -177,12 +201,7 @@ class OrthosGPU:
         self.d_dots = None
         self.d_dotw = None
 
-        self.gpu_available = False
-        try:
-            cuda.get_current_device()
-            self.gpu_available = True
-        except:
-            print("Warning: No GPU detected. GPU operations will fail.")
+        self.gpu_available = GPU_AVAILABLE
 
     def initialize_chars(self):
         digits = "0123456789"
@@ -289,9 +308,14 @@ class OrthosGPU:
         t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
         while True:
             t = self.trie_l[t]
-            s = t - self.trieq_c[1]
+            if t == 0:
+                 continue
+
+            s = int(t) - int(self.trieq_c[1])
+
             if s > TRIE_SIZE - len(self.xext):
-                 raise RuntimeError("Trie Overflow")
+                 if s < 0: continue
+                 raise RuntimeError(f"Trie Overflow: s={s}, t={t}")
 
             while self.trie_bmax < s:
                 self.trie_bmax += 1
@@ -313,7 +337,7 @@ class OrthosGPU:
                     break
 
         for q in range(1, self.qmax + 1):
-            t_node = s + self.trieq_c[q]
+            t_node = s + int(self.trieq_c[q])
             self.trie_l[self.trie_r[t_node]] = self.trie_l[t_node]
             self.trie_r[self.trie_l[t_node]] = self.trie_r[t_node]
             self.trie_c[t_node] = self.trieq_c[q]
@@ -398,79 +422,74 @@ class OrthosGPU:
         dotw_list = []
         lens_list = []
 
-        with open(filepath, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line: continue
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
 
-                word_ints = [self.xint[ord('.')]]
-                dots = [NO_HYF]
-                dotw = [1]
-                current_weight = 1
+                    word_ints = [self.xint[ord('.')]]
+                    dots = [NO_HYF]
+                    dotw = [1]
+                    current_weight = 1
 
-                i = 0
-                while i < len(line):
-                    char = line[i]
-                    code = ord(char)
+                    i = 0
+                    while i < len(line):
+                        char = line[i]
+                        code = ord(char)
 
-                    if code not in self.xint:
-                        self.xext.append(char)
-                        idx = len(self.xext) - 1
-                        self.xint[code] = idx
-                        self.xclass[code] = LETTER_CLASS
-                        self.cmax = len(self.xext) - 1
+                        if code not in self.xint:
+                            self.xext.append(char)
+                            idx = len(self.xext) - 1
+                            self.xint[code] = idx
+                            self.xclass[code] = LETTER_CLASS
+                            self.cmax = len(self.xext) - 1
 
-                    cls = self.xclass[code]
-                    if cls == LETTER_CLASS:
-                        word_ints.append(self.xint[code])
-                        dots.append(NO_HYF)
-                        dotw.append(current_weight)
-                    elif cls == HYF_CLASS:
-                        dots[-1] = self.xint[code]
-                    elif cls == DIGIT_CLASS:
-                        digit_val = self.xint[code]
-                        if len(word_ints) == 1:
-                            current_weight = digit_val
-                        else:
-                            dotw[-1] = digit_val
-                    i += 1
+                        cls = self.xclass[code]
+                        if cls == LETTER_CLASS:
+                            word_ints.append(self.xint[code])
+                            dots.append(NO_HYF)
+                            dotw.append(current_weight)
+                        elif cls == HYF_CLASS:
+                            dots[-1] = self.xint[code]
+                        elif cls == DIGIT_CLASS:
+                            digit_val = self.xint[code]
+                            if len(word_ints) == 1:
+                                current_weight = digit_val
+                            else:
+                                dotw[-1] = digit_val
+                        i += 1
 
-                word_ints.append(self.xint[ord('.')])
-                dots.append(NO_HYF)
-                dotw.append(current_weight)
+                    word_ints.append(self.xint[ord('.')])
+                    dots.append(NO_HYF)
+                    dotw.append(current_weight)
 
-                l = len(word_ints)
-                lens_list.append(l)
+                    l = len(word_ints)
+                    lens_list.append(l)
 
-                # Check for MAX_LEN overflow
-                if len(word_ints) > MAX_LEN:
-                    # Truncate
-                    word_ints = word_ints[:MAX_LEN]
-                    dots = dots[:MAX_LEN]
-                    dotw = dotw[:MAX_LEN]
-                    # Warn?
+                    # Check for MAX_LEN overflow
+                    if len(word_ints) > MAX_LEN:
+                        word_ints = word_ints[:MAX_LEN]
+                        dots = dots[:MAX_LEN]
+                        dotw = dotw[:MAX_LEN]
 
-                pad_len = MAX_LEN - len(word_ints)
-                if pad_len > 0:
-                    word_ints.extend([0] * pad_len)
-                    dots.extend([0] * pad_len)
-                    dotw.extend([0] * pad_len)
+                    pad_len = MAX_LEN - len(word_ints)
+                    if pad_len > 0:
+                        word_ints.extend([0] * pad_len)
+                        dots.extend([0] * pad_len)
+                        dotw.extend([0] * pad_len)
 
-                words_list.append(word_ints)
-                dots_list.append(dots)
-                dotw_list.append(dotw)
-
-        # Optimize memory layout for GPU coalescing: Use Fortran order (Column-Major)
-        # This means words[idx, :] is not contiguous, but words[:, col] is.
-        # Wait, for coalescing: Thread T reads words[T, 0]. Thread T+1 reads words[T+1, 0].
-        # These addresses should be adjacent.
-        # In Row-Major (C): words[T, 0] is at Base + T*RowSize. words[T+1, 0] is at Base + (T+1)*RowSize. Stride = RowSize. BAD.
-        # In Col-Major (F): words[T, 0] is at Base + T. words[T+1, 0] is at Base + T + 1. Stride = 1. GOOD.
+                    words_list.append(word_ints)
+                    dots_list.append(dots)
+                    dotw_list.append(dotw)
+        except Exception as e:
+            print(f"Error loading dictionary: {e}")
+            return False
 
         self.words = np.array(words_list, dtype=np.uint32, order='F')
         self.dots = np.array(dots_list, dtype=np.uint32, order='F')
         self.dotw = np.array(dotw_list, dtype=np.uint32, order='F')
-        self.word_lens = np.array(lens_list, dtype=np.int32) # Vector
+        self.word_lens = np.array(lens_list, dtype=np.int32)
 
         # Reset GPU cache
         self.d_words = None
@@ -479,6 +498,133 @@ class OrthosGPU:
         self.d_dotw = None
 
         print(f"Loaded {len(words_list)} words.")
+        return True
+
+    def scan_patterns(self, filepath):
+        """Scans pattern file to register all characters before Trie init."""
+        print(f"Scanning patterns from {filepath} for characters...")
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    for char in line:
+                        code = ord(char)
+                        if code not in self.xint:
+                            self.xext.append(char)
+                            idx = len(self.xext) - 1
+                            self.xint[code] = idx
+                            self.xclass[code] = LETTER_CLASS
+                            self.cmax = len(self.xext) - 1
+        except FileNotFoundError:
+            print(f"Pattern file {filepath} not found (skipping scan).")
+
+    def read_patterns(self, filepath):
+        print(f"Reading patterns from {filepath}...")
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            print(f"Pattern file {filepath} not found. Starting with empty patterns.")
+            return
+
+        level_pattern_count = 0
+        max_pat = 0
+
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+
+            level_pattern_count += 1
+
+            # Logic same as JS read_patterns
+            pat = []
+            hval = [0] * (len(line) + 2)
+            pat_len = 0
+            hval[0] = 0
+
+            i = 0
+            while i < len(line):
+                char = line[i]
+                code = ord(char)
+
+                if code not in self.xint:
+                    # Should not happen if scanned, but fallback just in case
+                    # (Note: doing this here AFTER init_trie is bad, but better than crashing if we can handle it?
+                    # No, it will crash Trie. So we print warning).
+                    print(f"Warning: New char '{char}' found in pattern after Trie init. Ignored.")
+                    i += 1
+                    continue
+
+                cls = self.xclass[code]
+                if cls == DIGIT_CLASS:
+                    d = self.xint[code]
+                    if d > max_pat: max_pat = d
+                    hval[pat_len] = d
+                elif cls == LETTER_CLASS:
+                    pat_len += 1
+                    hval[pat_len] = 0
+                    pat.append(self.xint[code])
+                i += 1
+
+            for k in range(pat_len + 1):
+                if hval[k] != 0:
+                    self.insert_pattern(pat, hval[k], k)
+
+        print(f"Read {level_pattern_count} patterns.")
+
+    def _output_patterns_recursive(self, s, pat_buffer, pat_len, outfile):
+        c = self.cmin
+        while c <= self.cmax:
+            t = s + c
+            if self.trie_c[t] == c:
+                # pat_buffer[pat_len] is equivalent to JS pat[pat_len]
+                # JS uses 1-based indexing for pattern construction during traversal.
+                if len(pat_buffer) <= pat_len:
+                    pat_buffer.append(c)
+                else:
+                    pat_buffer[pat_len] = c
+
+                h = self.trie_r[t]
+                if h > 0:
+                    # Reconstruct hval
+                    # JS: d=0..pat_len, hval[d]=0
+                    # traverse ops list
+                    local_hval = [0] * (pat_len + 2)
+
+                    curr = h
+                    while curr != 0:
+                        d = self.ops[curr]['dot']
+                        v = self.ops[curr]['val']
+                        if local_hval[d] < v:
+                            local_hval[d] = v
+                        curr = self.ops[curr]['op']
+
+                    # Write to file
+                    # Format: hval[0] (if >0) + pat[0] + hval[1] (if >0) + pat[1] ...
+                    line = ""
+                    if local_hval[0] > 0:
+                        line += self.xext[local_hval[0]] # Using xext to map int back to char (digit)
+
+                    for k in range(pat_len): # 0 to pat_len-1
+                        # char at k (which is pat_buffer[k] in 0-indexed list, or pat[k+1] in JS)
+                        # JS loop: d=1..pat_len. write xext[pat[d]]. if hval[d]>0 write.
+                        # pat_buffer is 0-indexed.
+                        char_code = pat_buffer[k]
+                        line += self.xext[char_code]
+                        if local_hval[k+1] > 0:
+                            line += self.xext[local_hval[k+1]]
+
+                    outfile.write(line + "\n")
+
+                if self.trie_l[t] > 0:
+                    self._output_patterns_recursive(self.trie_l[t], pat_buffer, pat_len + 1, outfile)
+            c += 1
+
+    def output_patterns(self, filepath):
+        print(f"Writing patterns to {filepath}...")
+        with open(filepath, 'w', encoding='utf-8') as f:
+            self._output_patterns_recursive(self.trie_root, [], 0, f)
 
     def delete_patterns(self, s):
         c = self.cmin
@@ -528,6 +674,120 @@ class OrthosGPU:
             if self.ops[h]['val'] == MAX_VAL:
                 self.ops[h]['val'] = 0
         self.qmax_thresh = 7
+
+    def calculate_stats(self, hyph_level, left_hyphen_min, right_hyphen_min):
+        """Calculates global hyphenation statistics (good, bad, missed)."""
+        if not self.gpu_available: return 0,0,0
+
+        # 1. Ensure hvals are computed (assumes do_dictionary_gpu ran recently)
+        # However, do_dictionary_gpu is per pattern length. We need stats for the WHOLE dictionary given CURRENT Trie.
+        # So we need to run kernel_hyphenate once for the whole dictionary with dummy pat_len/dot
+        # or just run it to update hvals.
+
+        # We need a clean run of hyphenation to get current state
+        self.sync_trie_to_gpu()
+        self.sync_dictionary_to_gpu()
+
+        n_words = self.words.shape[0]
+        d_hvals = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+        d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F') # Not used for stats but needed for kernel
+
+        threadsperblock = 128
+        blockspergrid = (n_words + (threadsperblock - 1)) // threadsperblock
+
+        # Dummy values for pat_len/pat_dot as we don't care about no_more for stats
+        kernel_hyphenate[blockspergrid, threadsperblock](
+            self.d_words, self.d_word_lens,
+            self.d_trie_c, self.d_trie_l, self.d_trie_r,
+            self.d_ops_val, self.d_ops_dot, self.d_ops_op,
+            self.trie_root,
+            d_hvals, d_no_more,
+            1, 0, hyph_level, MAX_VAL
+        )
+
+        # Now compute stats using Array operations
+        # dot limits
+        hyf_min = left_hyphen_min + 1
+        hyf_max = right_hyphen_min + 1
+
+        # Create a mask for valid positions [hyf_min, wlen - hyf_max]
+        # This is tricky with 2D array and variable lengths.
+        # We can construct a mask.
+        col_indices = cp.arange(MAX_LEN)[None, :] # 1 x 50
+        # Valid if: col >= hyf_min AND col <= (wlen - hyf_max)
+        # wlen is (N,) -> (N, 1)
+        wlens = self.d_word_lens[:, None]
+        valid_mask = (col_indices >= hyf_min) & (col_indices <= (wlens - hyf_max))
+
+        # Predicted Hyphen: hval is odd
+        is_predicted = (d_hvals % 2) == 1
+
+        # Truth
+        dots = self.d_dots
+        dotw = self.d_dotw.astype(cp.float32)
+
+        # Logic
+        # Found (Good): Predicted AND dots==FOUND_HYF
+        # Bad: Predicted AND dots==ERR_HYF
+        # Missed: NOT Predicted AND dots==IS_HYF
+
+        # Wait, JS logic for dots:
+        # Initially in dictionary:
+        # '-' -> is_hyf (12)
+        # '*' -> found_hyf (13) -- Wait, in JS found_hyf is 13.
+        # '#' -> err_hyf (11)
+
+        # JS `change_dots` modifies `dots` array in place!
+        # "If (hval[dpos] % 2) === 1) { dots[dpos] += 1; }"
+        # This changes state:
+        # is_hyf (12) -> found_hyf (13)
+        # no_hyf (10) -> err_hyf (11)
+        # err_hyf (11) -> 12 (is_hyf?? No, err_hyf+1 doesn't make sense logically but that's what JS does?)
+        # Let's check JS:
+        # "case found_hyf: good_count..."
+        # So it permanently marks them?
+        # NO. `change_dots` is called in `do_dictionary`. But `dots` are reset?
+        # JS `read_word` reads from `dictionary` which is in memory.
+        # Does it reset `dots` every time?
+        # `read_word` sets `dots[wlen] = xint[cc]` or `no_hyf`.
+        # Yes, `read_word` re-initializes `dots` from the raw file buffer every time `do_dictionary` loops through the file.
+        # So we don't need to persist state. We just compare.
+
+        # Valid Mask application
+        # We need to consider ONLY valid positions.
+
+        # Good Count: Where (hvals % 2 == 1) AND (original_dots == IS_HYF or original_dots == FOUND_HYF)
+        # Wait, IS_HYF is a hyphen that SHOULD be there.
+        # If we predict it, it's GOOD.
+        # If we don't, it's MISSED.
+        # If we predict where there is NO_HYF, it's BAD.
+
+        # My constants:
+        # IS_HYF = 12 (-)
+        # NO_HYF = 10 (empty)
+        # ERR_HYF = 11 (#)
+
+        c_predicted = (is_predicted & valid_mask)
+        c_not_predicted = ((~is_predicted) & valid_mask)
+
+        c_is_hyf = (dots == IS_HYF)
+        c_no_hyf = (dots == NO_HYF)
+        c_err_hyf = (dots == ERR_HYF) # Explicitly bad place
+
+        # Calculate
+        # Good: Predicted & Is_Hyf
+        good_mask = c_predicted & c_is_hyf
+        good_count = cp.sum(dotw * good_mask)
+
+        # Bad: Predicted & (No_Hyf OR Err_Hyf)
+        bad_mask = c_predicted & (c_no_hyf | c_err_hyf)
+        bad_count = cp.sum(dotw * bad_mask)
+
+        # Missed: Not Predicted & Is_Hyf
+        miss_mask = c_not_predicted & c_is_hyf
+        miss_count = cp.sum(dotw * miss_mask)
+
+        return float(good_count), float(bad_count), float(miss_count)
 
     def do_dictionary_gpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
         if not self.gpu_available:
@@ -644,9 +904,11 @@ class OrthosGPU:
         return good_pat_count, bad_pat_count
 
     def generate_level(self, pat_start, pat_finish, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
-        print(f"Generating Level {hyph_level}...")
+        print(f"\n--- Generating Level {hyph_level} ---")
+        print(f"Params: Start={pat_start}, Finish={pat_finish}, GoodWt={good_wt}, BadWt={bad_wt}, Thresh={thresh}")
 
         more_this_level = [True] * (MAX_DOT + 1)
+        total_good = 0
 
         for j in range(pat_start, pat_finish + 1):
             pat_len = j
@@ -658,18 +920,112 @@ class OrthosGPU:
                 dot1 = pat_len * 2 - dot1 - 1
 
                 if more_this_level[pat_dot]:
-                    print(f"  Length {pat_len}, Dot {pat_dot}")
+                    #print(f"  Length {pat_len}, Dot {pat_dot}")
                     good, bad = self.do_dictionary_gpu(
                         pat_len, pat_dot, hyph_level,
                         good_wt, bad_wt, thresh,
                         left_hyphen_min, right_hyphen_min
                     )
-                    print(f"    Added: {good} good, {bad} bad/hopeless")
+                    if good > 0 or bad > 0:
+                        print(f"    Len {pat_len} Dot {pat_dot}: +{good} good, +{bad} bad")
+
+                    total_good += good
+
+                    # Heuristic for "more to come" from JS?
+                    # JS sets more_to_come = true if undecided patterns exist.
+                    # My GPU logic currently drops undecided patterns.
+                    # Implementing exact "more_to_come" requires returning a flag if any pattern was between bounds.
+                    # For now, we assume if we found ANY good patterns, keep looking.
+                    if good > 0:
+                        more_this_level[pat_dot] = True
+                    else:
+                        more_this_level[pat_dot] = False
 
                 if pat_dot == pat_len:
                     break
 
+        print(f"Total patterns added this level: {total_good}")
         self.delete_bad_patterns()
 
+        # Report Stats
+        g, b, m = self.calculate_stats(hyph_level, left_hyphen_min, right_hyphen_min)
+        total = g + b + m
+        if total > 0:
+             print(f"Stats: Good={int(g)} ({g/total:.1%}), Bad={int(b)} ({b/total:.1%}), Missed={int(m)} ({m/total:.1%})")
+        else:
+             print("Stats: 0 total (Dictionary empty or error?)")
+
+def main():
+    import argparse
+
+    print("OrthosGPU - Python/CUDA Port of PatGen")
+
+    # Attempt to mount drive if in Colab
+    if 'google.colab' in sys.modules:
+        mount_drive()
+
+    # Simple CLI argument parsing
+    if len(sys.argv) < 4:
+        print("Usage: python orthos_gpu.py <dictionary_file> <pattern_file_in> <pattern_file_out>")
+        # If in interactive/test mode, don't exit, just print warning
+        if 'ipykernel' not in sys.modules:
+             # sys.exit(1)
+             pass
+        else:
+             print("Running in interactive mode/notebook.")
+             return
+
+    dict_file = sys.argv[1]
+    pat_in = sys.argv[2]
+    pat_out = sys.argv[3]
+
+    app = OrthosGPU()
+
+    if not app.load_dictionary_safe(dict_file):
+        print("Failed to load dictionary.")
+        return
+
+    app.scan_patterns(pat_in)
+    app.init_pattern_trie()
+    app.read_patterns(pat_in)
+
+    # Interactive Loop
+    try:
+        # Default Params
+        left_min = int(input("left_hyphen_min [2]: ") or 2)
+        right_min = int(input("right_hyphen_min [2]: ") or 2)
+
+        while True:
+            print("\nNext Step:")
+            print("1. Run Level Generation")
+            print("2. Output Patterns & Exit")
+            choice = input("Choice [1]: ").strip() or "1"
+
+            if choice == "2":
+                app.output_patterns(pat_out)
+                print("Done.")
+                break
+
+            # Level Config
+            hyph_level = int(input("Hyphenation Level (1-9): "))
+            pat_range = input("Pattern Start, Finish (e.g. '2 5'): ").split()
+            if len(pat_range) == 1: pat_range.append(pat_range[0])
+            p_start, p_end = int(pat_range[0]), int(pat_range[1])
+
+            weights = input("GoodWt, BadWt, Thresh (e.g. '1 1 10'): ").split()
+            if len(weights) < 3: weights = [1, 1, 1]
+            gw, bw, th = int(weights[0]), int(weights[1]), int(weights[2])
+
+            app.generate_level(p_start, p_end, hyph_level, gw, bw, th, left_min, right_min)
+
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        try:
+             save = input("Save current patterns? (y/n): ")
+             if save.lower() == 'y':
+                 app.output_patterns(pat_out)
+        except:
+             pass
+
 if __name__ == "__main__":
-    pass
+    main()
