@@ -57,7 +57,7 @@ def kernel_hyphenate(words, word_lens, trie_c, trie_l, trie_r, ops_val, ops_dot,
         if fpos >= wlen: continue
 
         char_code = words[idx, fpos]
-        t = trie_root + char_code
+        t = int32(trie_root) + int32(char_code)
 
         # Traverse Trie
         while True:
@@ -87,7 +87,7 @@ def kernel_hyphenate(words, word_lens, trie_c, trie_l, trie_r, ops_val, ops_dot,
 
                     h = op_next
 
-                t = trie_l[t]
+                t = int32(trie_l[t])
                 if t == 0:
                     break
 
@@ -95,7 +95,7 @@ def kernel_hyphenate(words, word_lens, trie_c, trie_l, trie_r, ops_val, ops_dot,
                 if fpos >= wlen:
                     break
                 char_code = words[idx, fpos]
-                t = t + char_code
+                t = int32(t) + int32(char_code)
             else:
                 break
 
