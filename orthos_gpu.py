@@ -144,11 +144,16 @@ class OrthosGPU:
         self.xint = {}
         self.xext = []
         self.xclass = {}
-        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int64)
-        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int64)
-        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int64)
-        self.trie_taken = np.zeros(TRIE_SIZE, dtype=np.uint8)
-        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(MAX_OPS + 1)] # 1-based
+        
+        # Dynamic trie sizing
+        self.trie_size = TRIE_SIZE
+        self.max_ops = MAX_OPS
+        
+        self.trie_c = np.zeros(self.trie_size, dtype=np.int64)
+        self.trie_l = np.zeros(self.trie_size, dtype=np.int64)
+        self.trie_r = np.zeros(self.trie_size, dtype=np.int64)
+        self.trie_taken = np.zeros(self.trie_size, dtype=np.uint8)
+        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(self.max_ops + 1)] # 1-based
 
         # Trie packing structures
         self.trieq_c = np.zeros(50, dtype=np.int64)
@@ -164,6 +169,33 @@ class OrthosGPU:
 
         self.initialize_chars()
         self.init_pattern_trie()
+    
+    def expand_trie(self, factor=2):
+        """Expand trie arrays when overflow occurs."""
+        old_size = self.trie_size
+        new_size = int(old_size * factor)
+        
+        print(f"  ⚠️ Trie overflow! Expanding from {old_size:,} to {new_size:,}...")
+        
+        # Expand arrays
+        new_trie_c = np.zeros(new_size, dtype=np.int64)
+        new_trie_l = np.zeros(new_size, dtype=np.int64)
+        new_trie_r = np.zeros(new_size, dtype=np.int64)
+        new_trie_taken = np.zeros(new_size, dtype=np.uint8)
+        
+        # Copy existing data
+        new_trie_c[:old_size] = self.trie_c
+        new_trie_l[:old_size] = self.trie_l
+        new_trie_r[:old_size] = self.trie_r
+        new_trie_taken[:old_size] = self.trie_taken
+        
+        self.trie_c = new_trie_c
+        self.trie_l = new_trie_l
+        self.trie_r = new_trie_r
+        self.trie_taken = new_trie_taken
+        self.trie_size = new_size
+        
+        print(f"     ✅ Trie expanded successfully")
 
         # Data
         self.words = None
@@ -288,12 +320,21 @@ class OrthosGPU:
 
     def first_fit(self):
         t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
+        max_attempts = 3  # Prevent infinite loop
+        attempt = 0
+        
         while True:
             t = int(self.trie_l[t])
             s = int(t) - int(self.trieq_c[1])
             # Check for overflow (negative s or too large)
-            if s < 0 or s > TRIE_SIZE - len(self.xext):
-                 raise RuntimeError("Trie Overflow")
+            if s < 0 or s > self.trie_size - len(self.xext):
+                attempt += 1
+                if attempt >= max_attempts:
+                    raise RuntimeError(f"Trie Overflow after {max_attempts} expansion attempts")
+                self.expand_trie(factor=2)
+                # After expansion, restart the search
+                t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
+                continue
 
             while self.trie_bmax < s:
                 self.trie_bmax += 1
