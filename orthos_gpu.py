@@ -518,10 +518,10 @@ class OrthosGPU:
                     ops_list.append(self.ops[h])
                     h = self.ops[h]['op']
 
-                # Keep ops where val == MAX_VAL
+                # Keep GOOD patterns (val != MAX_VAL), remove bad ones (val == MAX_VAL)
                 new_head = 0
                 for op in reversed(ops_list):
-                    if op['val'] == MAX_VAL:
+                    if op['val'] != MAX_VAL:  # Keep good patterns
                         h = self.new_trie_op(op['val'], op['dot'], new_head)
                         new_head = h
 
