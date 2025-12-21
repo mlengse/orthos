@@ -14,8 +14,8 @@ import os
 MAX_VAL = 10
 MAX_DOT = 15
 MAX_LEN = 50
-TRIE_SIZE = 55000 * 200  # Increased for larger dictionaries
-MAX_OPS = 510 * 50       # Increased for more patterns
+TRIE_SIZE = 55000 * 500  # Increased further for larger pattern sets
+MAX_OPS = 510 * 100       # Increased for more patterns
 
 # Character Classes
 DIGIT_CLASS = 1
