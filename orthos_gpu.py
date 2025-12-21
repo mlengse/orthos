@@ -504,6 +504,97 @@ class OrthosGPU:
             # Keep CPU copies for evaluate() but could delete if GPU-only evaluation is implemented
             print(f"  ✅ Dictionary on GPU. GPU Memory used: {cp.get_default_memory_pool().used_bytes() / 1e6:.1f} MB")
 
+    def load_patterns(self, filepath):
+        """
+        Load existing patterns from a TeX hyphenation file.
+        
+        Format expected: Standard TeX \patterns{...} format
+        e.g., "1ba", "a1a", ".meng1", "2kh"
+        
+        Numbers indicate hyphenation values at that position.
+        '.' indicates word boundary.
+        """
+        print(f"Loading seed patterns from {filepath}...")
+        
+        pattern_count = 0
+        in_patterns = False
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                
+                # Skip comments
+                if line.startswith('%'):
+                    continue
+                
+                # Detect \patterns{ block
+                if '\\patterns{' in line:
+                    in_patterns = True
+                    # Get content after \patterns{
+                    line = line.split('\\patterns{', 1)[1]
+                
+                if not in_patterns:
+                    continue
+                
+                # Detect end of patterns block
+                if '}' in line:
+                    line = line.split('}')[0]
+                    in_patterns = False
+                
+                # Parse patterns from line (space-separated)
+                tokens = line.split()
+                for token in tokens:
+                    if not token:
+                        continue
+                    
+                    # Parse pattern: extract letters and digit positions
+                    # e.g., "1ba" -> pattern ['b','a'], value=1 at dot position 0
+                    # e.g., "a1a" -> pattern ['a','a'], value=1 at dot position 1
+                    # e.g., ".meng1" -> pattern ['.','m','e','n','g'], value=1 at position 5
+                    
+                    letters = []
+                    values = {}  # position -> value
+                    
+                    i = 0
+                    letter_pos = 0
+                    while i < len(token):
+                        char = token[i]
+                        if char.isdigit():
+                            values[letter_pos] = int(char)
+                            i += 1
+                        else:
+                            letters.append(char)
+                            letter_pos += 1
+                            i += 1
+                    
+                    if not letters:
+                        continue
+                    
+                    # Convert to internal format
+                    pat_ints = []
+                    for ch in letters:
+                        code = ord(ch)
+                        if code not in self.xint:
+                            # Add new character to alphabet
+                            self.xext.append(ch)
+                            idx = len(self.xext) - 1
+                            self.xint[code] = idx
+                            self.xclass[code] = LETTER_CLASS
+                            self.cmax = len(self.xext) - 1
+                        pat_ints.append(self.xint[code])
+                    
+                    # Insert patterns for each value position
+                    for dot_pos, val in values.items():
+                        if val > 0 and val < MAX_VAL:
+                            try:
+                                self.insert_pattern(pat_ints, val, dot_pos)
+                                pattern_count += 1
+                            except RuntimeError as e:
+                                print(f"  Warning: Failed to insert pattern '{token}': {e}")
+        
+        print(f"  ✅ Loaded {pattern_count} seed patterns")
+        return pattern_count
+
     def delete_patterns(self, s):
         c = self.cmin
         all_freed = True
