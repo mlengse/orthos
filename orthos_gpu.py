@@ -511,18 +511,19 @@ class OrthosGPU:
         while c <= self.cmax:
             t = s + c
             if self.trie_c[t] == c:
-                # Compression logic
+                # Collect ops as TUPLES (value copies), not dict references
                 ops_list = []
-                h = self.trie_r[t]
+                h = int(self.trie_r[t])
                 while h > 0:
-                    ops_list.append(self.ops[h])
+                    # Store copies of values, not dictionary references!
+                    ops_list.append((self.ops[h]['val'], self.ops[h]['dot'], self.ops[h]['op']))
                     h = self.ops[h]['op']
 
                 # Keep GOOD patterns (val != MAX_VAL), remove bad ones (val == MAX_VAL)
                 new_head = 0
-                for op in reversed(ops_list):
-                    if op['val'] != MAX_VAL:  # Keep good patterns
-                        h = self.new_trie_op(op['val'], op['dot'], new_head)
+                for val, dot, _ in reversed(ops_list):
+                    if val != MAX_VAL and val > 0:  # Keep good patterns
+                        h = self.new_trie_op(val, dot, new_head)
                         new_head = h
 
                 self.trie_r[t] = new_head
