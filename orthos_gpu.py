@@ -816,13 +816,25 @@ class OrthosGPU:
 
         return hvals
 
-    def _format_hyphenated(self, word_ints, hvals):
-        """Format a word with hyphenation marks."""
+    def _format_hyphenated(self, word_ints, hvals, is_expected=False):
+        """Format a word with hyphenation marks.
+        
+        Args:
+            word_ints: List of character codes
+            hvals: Hyphenation values (IS_HYF for expected, or hvals for predicted)
+            is_expected: True if hvals contains IS_HYF/NO_HYF constants from dictionary
+        """
         result = []
         for i, c in enumerate(word_ints):
             if i > 0 and i < len(hvals):
-                if hvals[i] % 2 == 1 and hvals[i] > 0:
-                    result.append('-')
+                if is_expected:
+                    # For expected: check if == IS_HYF (12)
+                    if hvals[i] == IS_HYF:
+                        result.append('-')
+                else:
+                    # For predicted: check if odd and > 0
+                    if hvals[i] % 2 == 1 and hvals[i] > 0:
+                        result.append('-')
             ch = self.xext[c] if c < len(self.xext) else '?'
             if ch != '.':
                 result.append(ch)
