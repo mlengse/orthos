@@ -320,21 +320,13 @@ class OrthosGPU:
 
     def first_fit(self):
         t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
-        max_attempts = 3  # Prevent infinite loop
-        attempt = 0
         
         while True:
             t = int(self.trie_l[t])
             s = int(t) - int(self.trieq_c[1])
             # Check for overflow (negative s or too large)
             if s < 0 or s > self.trie_size - len(self.xext):
-                attempt += 1
-                if attempt >= max_attempts:
-                    raise RuntimeError(f"Trie Overflow after {max_attempts} expansion attempts")
-                self.expand_trie(factor=2)
-                # After expansion, restart the search
-                t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
-                continue
+                raise RuntimeError("Trie Overflow")
 
             while self.trie_bmax < s:
                 self.trie_bmax += 1
@@ -783,6 +775,7 @@ class OrthosGPU:
 
         good_pat_count = 0
         bad_pat_count = 0
+        skipped_count = 0
 
         for i in range(num_unique):
             w_good = cpu_weights[i, 0]
@@ -790,14 +783,18 @@ class OrthosGPU:
 
             pat = cpu_patterns[i].tolist()
 
-            if (good_wt * w_good) < thresh:
-                self.insert_pattern(pat, MAX_VAL, pat_dot)
-                bad_pat_count += 1
-            elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
-                self.insert_pattern(pat, hyph_level, pat_dot)
-                good_pat_count += 1
-            else:
-                pass
+            try:
+                if (good_wt * w_good) < thresh:
+                    self.insert_pattern(pat, MAX_VAL, pat_dot)
+                    bad_pat_count += 1
+                elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
+                    self.insert_pattern(pat, hyph_level, pat_dot)
+                    good_pat_count += 1
+            except RuntimeError:
+                skipped_count += 1
+        
+        if skipped_count > 0:
+            print(f"    (skipped {skipped_count} patterns due to trie overflow)")
 
         return good_pat_count, bad_pat_count
 
