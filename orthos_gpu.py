@@ -171,6 +171,12 @@ class OrthosGPU:
         self.dots = None
         self.dotw = None
 
+        # GPU Cache for Dictionary
+        self.d_words = None
+        self.d_word_lens = None
+        self.d_dots = None
+        self.d_dotw = None
+
         self.gpu_available = False
         try:
             cuda.get_current_device()
@@ -240,6 +246,24 @@ class OrthosGPU:
         self.d_ops_val = cp.asarray(ops_val)
         self.d_ops_dot = cp.asarray(ops_dot)
         self.d_ops_op = cp.asarray(ops_op)
+
+    def sync_dictionary_to_gpu(self):
+        """Uploads dictionary data to GPU only if not already cached."""
+        if not self.gpu_available: return
+
+        # Check if already cached
+        if (self.d_words is not None and
+            self.d_word_lens is not None and
+            self.d_dots is not None and
+            self.d_dotw is not None):
+            return
+
+        print("Uploading dictionary to GPU (Caching)...")
+        # Ensure order is preserved or correctly handled by cupy
+        self.d_words = cp.asarray(self.words, order='F')
+        self.d_word_lens = cp.asarray(self.word_lens)
+        self.d_dots = cp.asarray(self.dots, order='F')
+        self.d_dotw = cp.asarray(self.dotw, order='F')
 
     def unpack(self, s):
         qmax = 1
@@ -448,6 +472,12 @@ class OrthosGPU:
         self.dotw = np.array(dotw_list, dtype=np.uint32, order='F')
         self.word_lens = np.array(lens_list, dtype=np.int32) # Vector
 
+        # Reset GPU cache
+        self.d_words = None
+        self.d_word_lens = None
+        self.d_dots = None
+        self.d_dotw = None
+
         print(f"Loaded {len(words_list)} words.")
 
     def delete_patterns(self, s):
@@ -504,15 +534,17 @@ class OrthosGPU:
             print("Skipping GPU execution (No GPU).")
             return 0, 0
 
-        # 1. Sync Trie
+        # 1. Sync Trie (Always needed as Trie changes)
         self.sync_trie_to_gpu()
 
-        # 2. Setup GPU Data
-        # Ensure order is preserved or correctly handled by cupy
-        d_words = cp.asarray(self.words, order='F')
-        d_word_lens = cp.asarray(self.word_lens)
-        d_dots = cp.asarray(self.dots, order='F')
-        d_dotw = cp.asarray(self.dotw, order='F')
+        # 2. Sync Dictionary (Cached)
+        self.sync_dictionary_to_gpu()
+
+        # Use cached handles
+        d_words = self.d_words
+        d_word_lens = self.d_word_lens
+        d_dots = self.d_dots
+        d_dotw = self.d_dotw
 
         n_words = self.words.shape[0]
         # Hvals also benefit from F order

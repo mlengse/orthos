@@ -1067,10 +1067,12 @@ function read_word() {
     while (cc !== 10) {
         switch (xclass[cc]) {
         case letter_class:
-            wlen += 1;
-            word[wlen] = xint[cc];
-            dots[wlen] = no_hyf;
-            dotw[wlen] = word_wt;
+            if (wlen < max_len - 2) {
+                wlen += 1;
+                word[wlen] = xint[cc];
+                dots[wlen] = no_hyf;
+                dotw[wlen] = word_wt;
+            }
             break;
         case hyf_class:
             dots[wlen] = xint[cc];
