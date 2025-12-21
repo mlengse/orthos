@@ -169,6 +169,25 @@ class OrthosGPU:
 
         self.initialize_chars()
         self.init_pattern_trie()
+
+        # Data
+        self.words = None
+        self.word_lens = None
+        self.dots = None
+        self.dotw = None
+
+        # GPU Cache for Dictionary
+        self.d_words = None
+        self.d_word_lens = None
+        self.d_dots = None
+        self.d_dotw = None
+
+        self.gpu_available = False
+        try:
+            cuda.get_current_device()
+            self.gpu_available = True
+        except Exception:
+            print("Warning: No GPU detected. GPU operations will fail.")
     
     def expand_trie(self, factor=2):
         """Expand trie arrays when overflow occurs."""
@@ -195,26 +214,7 @@ class OrthosGPU:
         self.trie_taken = new_trie_taken
         self.trie_size = new_size
         
-        print(f"     ✅ Trie expanded successfully")
-
-        # Data
-        self.words = None
-        self.word_lens = None
-        self.dots = None
-        self.dotw = None
-
-        # GPU Cache for Dictionary
-        self.d_words = None
-        self.d_word_lens = None
-        self.d_dots = None
-        self.d_dotw = None
-
-        self.gpu_available = False
-        try:
-            cuda.get_current_device()
-            self.gpu_available = True
-        except:
-            print("Warning: No GPU detected. GPU operations will fail.")
+        print("     ✅ Trie expanded successfully")
 
     def initialize_chars(self):
         digits = "0123456789"
