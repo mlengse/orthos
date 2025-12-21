@@ -10,8 +10,8 @@ import time
 MAX_VAL = 10
 MAX_DOT = 15
 MAX_LEN = 50
-TRIE_SIZE = 55000 * 80
-MAX_OPS = 510 * 10
+TRIE_SIZE = 100000 * 100  # Increased for larger dictionary (70K words)
+MAX_OPS = 5100 * 10  # Increased for more patterns
 
 # Character Classes
 DIGIT_CLASS = 1
