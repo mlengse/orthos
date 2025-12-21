@@ -12,6 +12,67 @@
 Example:
 `node orthos.js wordlist.txt pattern.0 pattern.1`
 
+---
+
+## Python Implementations
+
+Selain versi JavaScript, tersedia juga implementasi Python untuk pattern generation:
+
+### orthos_gpu.py (GPU-Accelerated)
+
+Implementasi menggunakan CUDA/CuPy untuk akselerasi GPU. Cocok untuk Google Colab atau system dengan NVIDIA GPU.
+
+**Dependensi:**
+```bash
+pip install numpy numba cupy-cuda12x
+```
+
+**Penggunaan:**
+```python
+from orthos_gpu import OrthosGPU
+
+orthos = OrthosGPU()
+orthos.load_dictionary_safe("wordlist.dic")
+orthos.generate_level(
+    pat_start=2, pat_finish=5,
+    hyph_level=1,
+    good_wt=1, bad_wt=1, thresh=1,
+    left_hyphen_min=2, right_hyphen_min=2
+)
+```
+
+### orthos_cpu.py (CPU-Only)
+
+Implementasi murni NumPy tanpa dependensi GPU. Cocok untuk environment tanpa GPU.
+
+**Dependensi:**
+```bash
+pip install numpy
+```
+
+**Penggunaan:**
+```python
+from orthos_cpu import OrthosCPU
+
+orthos = OrthosCPU()
+orthos.load_dictionary_safe("wordlist.dic")
+orthos.generate_level(
+    pat_start=2, pat_finish=5,
+    hyph_level=1,
+    good_wt=1, bad_wt=1, thresh=1,
+    left_hyphen_min=2, right_hyphen_min=2
+)
+```
+
+### Format Dictionary
+
+File dictionary menggunakan format yang sama dengan patgen:
+- Setiap baris berisi satu kata dengan hyphenation marks
+- Gunakan `-` untuk menandai titik pemenggalan yang benar
+- Contoh: `in-do-ne-si-a`
+
+---
+
 ## HISTORY
 patgen (PATtern GENeration program for the TEX82 hyphenator) was originally
 written by Frank Liang in PASCAL in 1983 and had revisions in 1991, 1992
