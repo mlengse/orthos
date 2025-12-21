@@ -494,6 +494,16 @@ class OrthosGPU:
 
         print(f"Loaded {len(words_list)} words with {self.cmax + 1} unique characters.")
 
+        # Immediately upload dictionary to GPU to free CPU memory
+        if self.gpu_available:
+            print("Uploading dictionary to GPU...")
+            self.d_words = cp.asarray(self.words, order='F')
+            self.d_word_lens = cp.asarray(self.word_lens)
+            self.d_dots = cp.asarray(self.dots, order='F')
+            self.d_dotw = cp.asarray(self.dotw, order='F')
+            # Keep CPU copies for evaluate() but could delete if GPU-only evaluation is implemented
+            print(f"  ✅ Dictionary on GPU. GPU Memory used: {cp.get_default_memory_pool().used_bytes() / 1e6:.1f} MB")
+
     def delete_patterns(self, s):
         c = self.cmin
         all_freed = True
@@ -685,6 +695,158 @@ class OrthosGPU:
                     break
 
         self.delete_bad_patterns()
+
+    @property
+    def patterns(self):
+        """
+        Extract all patterns from the trie.
+        Returns a list of (pattern_string, value, dot_position) tuples.
+        """
+        patterns_list = []
+        self._collect_patterns(self.trie_root, [], patterns_list)
+        return patterns_list
+
+    def _collect_patterns(self, s, prefix, patterns_list):
+        """Recursively collect patterns from the trie."""
+        for c in range(self.cmin, self.cmax + 1):
+            t = s + c
+            if t < len(self.trie_c) and self.trie_c[t] == c:
+                new_prefix = prefix + [c]
+
+                # Check for ops at this node
+                h = int(self.trie_r[t])
+                while h > 0:
+                    val = self.ops[h]['val']
+                    dot = self.ops[h]['dot']
+                    if val > 0 and val < MAX_VAL:
+                        # Build pattern string
+                        pat_str = ''.join(self.xext[ch] if ch < len(self.xext) else '?' for ch in new_prefix)
+                        patterns_list.append((pat_str, val, dot))
+                    h = self.ops[h]['op']
+
+                # Recurse into children
+                child = int(self.trie_l[t])
+                if child > 0:
+                    self._collect_patterns(child, new_prefix, patterns_list)
+
+    def evaluate(self):
+        """
+        Evaluate the current patterns against the dictionary.
+        Returns (accuracy, list of failures).
+        """
+        failures = []
+        correct = 0
+        total = 0
+
+        for idx in range(len(self.words)):
+            word_ints = self.words[idx]
+            word_len = self.word_lens[idx]
+            expected_dots = self.dots[idx]
+
+            # Get predicted hyphenation using current patterns
+            predicted = self._hyphenate_word(word_ints[:word_len])
+
+            # Compare
+            match = True
+            for i in range(1, word_len - 1):  # Skip edge markers
+                exp = expected_dots[i]
+                pred_val = predicted[i] if i < len(predicted) else 0
+                # Check if hyphenation matches
+                exp_hyph = (exp == IS_HYF)
+                pred_hyph = (pred_val % 2 == 1) and (pred_val > 0)
+                if exp_hyph != pred_hyph:
+                    match = False
+                    break
+
+            if match:
+                correct += 1
+            else:
+                # Build word string for error reporting
+                word_str = ''.join(self.xext[c] if c < len(self.xext) else '?' for c in word_ints[:word_len])
+                exp_str = self._format_hyphenated(word_ints[:word_len], expected_dots[:word_len])
+                pred_str = self._format_hyphenated(word_ints[:word_len], predicted)
+                failures.append((word_str.strip('.'), exp_str, pred_str))
+
+            total += 1
+
+        accuracy = correct / total if total > 0 else 0.0
+        return accuracy, failures
+
+    def _hyphenate_word(self, word_ints):
+        """Hyphenate a single word using current patterns."""
+        hvals = [0] * len(word_ints)
+
+        for spos in range(len(word_ints) - 1, -1, -1):
+            fpos = spos + 1
+            if fpos >= len(word_ints):
+                continue
+
+            char_code = word_ints[fpos]
+            t = self.trie_root + char_code
+
+            while True:
+                if t >= len(self.trie_c):
+                    break
+
+                if self.trie_c[t] == char_code:
+                    h = int(self.trie_r[t])
+                    while h > 0:
+                        op_val = self.ops[h]['val']
+                        op_dot = self.ops[h]['dot']
+                        dpos = spos + op_dot
+
+                        if dpos < len(hvals) and op_val < MAX_VAL:
+                            if hvals[dpos] < op_val:
+                                hvals[dpos] = op_val
+
+                        h = self.ops[h]['op']
+
+                    t = int(self.trie_l[t])
+                    if t == 0:
+                        break
+
+                    fpos += 1
+                    if fpos >= len(word_ints):
+                        break
+                    char_code = word_ints[fpos]
+                    t = t + char_code
+                else:
+                    break
+
+        return hvals
+
+    def _format_hyphenated(self, word_ints, hvals):
+        """Format a word with hyphenation marks."""
+        result = []
+        for i, c in enumerate(word_ints):
+            if i > 0 and i < len(hvals):
+                if hvals[i] % 2 == 1 and hvals[i] > 0:
+                    result.append('-')
+            ch = self.xext[c] if c < len(self.xext) else '?'
+            if ch != '.':
+                result.append(ch)
+        return ''.join(result)
+
+    def export_patterns(self, filename):
+        """Export patterns to a file in TeX hyphenation format."""
+        pats = self.patterns
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("% Hyphenation patterns for Indonesian\n")
+            f.write("% Generated by OrthosGPU\n")
+            f.write("\\patterns{\n")
+            for pat_str, val, dot in sorted(pats, key=lambda x: x[0]):
+                # Insert the value at the dot position
+                pat_chars = list(pat_str)
+                out = []
+                for i, ch in enumerate(pat_chars):
+                    if i == dot:
+                        out.append(str(val))
+                    out.append(ch)
+                if dot == len(pat_chars):
+                    out.append(str(val))
+                f.write(''.join(out) + '\n')
+            f.write("}\n")
+        print(f"Exported {len(pats)} patterns to {filename}")
 
 if __name__ == "__main__":
     pass
