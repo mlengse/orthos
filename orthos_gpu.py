@@ -764,7 +764,7 @@ class OrthosGPU:
             else:
                 # Build word string for error reporting
                 word_str = ''.join(self.xext[c] if c < len(self.xext) else '?' for c in word_ints[:word_len])
-                exp_str = self._format_hyphenated(word_ints[:word_len], expected_dots[:word_len])
+                exp_str = self._format_hyphenated(word_ints[:word_len], expected_dots[:word_len], is_expected=True)
                 pred_str = self._format_hyphenated(word_ints[:word_len], predicted)
                 failures.append((word_str.strip('.'), exp_str, pred_str))
 
