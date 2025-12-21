@@ -597,7 +597,8 @@ class OrthosGPU:
         if valid_patterns.shape[0] == 0:
             return 0, 0
 
-        keys = tuple(valid_patterns[:, i] for i in range(pat_len - 1, -1, -1))
+        # CuPy's lexsort expects a 2D array, not a tuple
+        keys = cp.vstack([valid_patterns[:, i] for i in range(pat_len - 1, -1, -1)])
         sorted_indices = cp.lexsort(keys)
 
         sorted_patterns = valid_patterns[sorted_indices]
