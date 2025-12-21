@@ -144,16 +144,16 @@ class OrthosGPU:
         self.xint = {}
         self.xext = []
         self.xclass = {}
-        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.uint32)
-        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.uint32)
-        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.uint32)
+        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int64)
         self.trie_taken = np.zeros(TRIE_SIZE, dtype=np.uint8)
         self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(MAX_OPS + 1)] # 1-based
 
         # Trie packing structures
-        self.trieq_c = np.zeros(50, dtype=np.uint32)
-        self.trieq_l = np.zeros(50, dtype=np.uint32)
-        self.trieq_r = np.zeros(50, dtype=np.uint32)
+        self.trieq_c = np.zeros(50, dtype=np.int64)
+        self.trieq_l = np.zeros(50, dtype=np.int64)
+        self.trieq_r = np.zeros(50, dtype=np.int64)
         self.qmax = 0
         self.qmax_thresh = 5
         self.trie_max = 0
@@ -230,9 +230,10 @@ class OrthosGPU:
 
     def sync_trie_to_gpu(self):
         if not self.gpu_available: return
-        self.d_trie_c = cp.asarray(self.trie_c)
-        self.d_trie_l = cp.asarray(self.trie_l)
-        self.d_trie_r = cp.asarray(self.trie_r)
+        # Cast to int32 for GPU kernel compatibility (kernel uses int32 indexing)
+        self.d_trie_c = cp.asarray(self.trie_c.astype(np.int32))
+        self.d_trie_l = cp.asarray(self.trie_l.astype(np.int32))
+        self.d_trie_r = cp.asarray(self.trie_r.astype(np.int32))
 
         ops_val = np.zeros(MAX_OPS + 1, dtype=np.uint8)
         ops_dot = np.zeros(MAX_OPS + 1, dtype=np.uint8)
@@ -288,9 +289,10 @@ class OrthosGPU:
     def first_fit(self):
         t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
         while True:
-            t = self.trie_l[t]
-            s = t - self.trieq_c[1]
-            if s > TRIE_SIZE - len(self.xext):
+            t = int(self.trie_l[t])
+            s = int(t) - int(self.trieq_c[1])
+            # Check for overflow (negative s or too large)
+            if s < 0 or s > TRIE_SIZE - len(self.xext):
                  raise RuntimeError("Trie Overflow")
 
             while self.trie_bmax < s:
@@ -478,7 +480,19 @@ class OrthosGPU:
         self.d_dots = None
         self.d_dotw = None
 
-        print(f"Loaded {len(words_list)} words.")
+        # Reinitialize trie with the expanded character set
+        # Reset trie arrays since cmax may have changed
+        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_taken = np.zeros(TRIE_SIZE, dtype=np.uint8)
+        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(MAX_OPS + 1)]
+        self.op_count = 0
+        self.trie_max = 0
+        self.trie_bmax = 0
+        self.init_pattern_trie()
+
+        print(f"Loaded {len(words_list)} words with {self.cmax + 1} unique characters.")
 
     def delete_patterns(self, s):
         c = self.cmin
