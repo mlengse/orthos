@@ -826,18 +826,22 @@ class OrthosGPU:
         """
         result = []
         for i, c in enumerate(word_ints):
-            if i > 0 and i < len(hvals):
-                if is_expected:
-                    # For expected: check if == IS_HYF (12)
-                    if hvals[i] == IS_HYF:
-                        result.append('-')
-                else:
-                    # For predicted: check if odd and > 0
-                    if hvals[i] % 2 == 1 and hvals[i] > 0:
-                        result.append('-')
             ch = self.xext[c] if c < len(self.xext) else '?'
             if ch != '.':
                 result.append(ch)
+                # Check if hyphen should appear AFTER this character
+                if i < len(hvals):
+                    if is_expected:
+                        # For expected: check if == IS_HYF (12)
+                        if hvals[i] == IS_HYF:
+                            result.append('-')
+                    else:
+                        # For predicted: check if odd and > 0
+                        if hvals[i] % 2 == 1 and hvals[i] > 0:
+                            result.append('-')
+        # Remove trailing hyphen if any
+        if result and result[-1] == '-':
+            result = result[:-1]
         return ''.join(result)
 
     def export_patterns(self, filename):
