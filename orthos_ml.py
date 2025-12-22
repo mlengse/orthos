@@ -232,10 +232,13 @@ class OrthosML:
             
             with open(filepath, 'r', encoding='utf-8') as f:
                 for line in f:
+                    # Strip inline comments (everything after %)
+                    if '%' in line:
+                        line = line.split('%')[0]
                     line = line.strip()
                     
-                    # Skip comments and empty lines
-                    if line.startswith('%') or not line:
+                    # Skip empty lines
+                    if not line:
                         continue
                     
                     # Detect \patterns{ block
@@ -251,7 +254,7 @@ class OrthosML:
                     if in_patterns or line:
                         # Parse patterns from line
                         for pat in line.split():
-                            if pat and not pat.startswith('%'):
+                            if pat:
                                 patterns.append(pat)
             
             self._baseline_patterns = patterns
