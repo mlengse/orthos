@@ -392,6 +392,9 @@ class OrthosGPU:
     def insert_pattern(self, pat, val, dot):
         # pat is list of ints, 0-indexed
         pat_len = len(pat)
+        if pat_len > MAX_LEN:
+            raise ValueError(f"Pattern length {pat_len} exceeds MAX_LEN {MAX_LEN}")
+
         i = 0
         s = self.trie_root + pat[i]
         t = self.trie_l[s]
