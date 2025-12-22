@@ -445,26 +445,27 @@ class OrthosML:
             avg_prob = sum(probs) / len(probs)
             
             # Multi-level based on confidence
-            # Level 1, 3, 5, 7, 9 = allow (odd)
-            # Level 2, 4, 6, 8 = inhibit (even)
+            # Level 1, 3, 5, 7, 9 = allow (odd) - higher = more confident
+            # Level 2, 4, 6, 8 = inhibit (even) - higher = more confident
+            # IMPORTANT: Allow levels must be >= inhibit levels to win
             level = None
             
             if avg_prob > 0.95:
-                level = 7  # Very high confidence allow
+                level = 9  # Very high confidence allow (highest priority)
             elif avg_prob > 0.85:
-                level = 5  # High confidence allow
+                level = 7  # High confidence allow
             elif avg_prob > 0.70:
-                level = 3  # Medium-high confidence allow
+                level = 5  # Medium-high confidence allow
             elif avg_prob > 0.50:
-                level = 1  # Medium confidence allow
+                level = 3  # Medium confidence allow
             elif avg_prob < 0.05:
-                level = 8  # Very high confidence inhibit
+                level = 8  # Very high confidence inhibit (but < 9)
             elif avg_prob < 0.15:
-                level = 6  # High confidence inhibit
+                level = 6  # High confidence inhibit (but < 7)
             elif avg_prob < 0.30:
-                level = 4  # Medium-high confidence inhibit
+                level = 4  # Medium-high confidence inhibit (but < 5)
             elif avg_prob < 0.50:
-                level = 2  # Medium confidence inhibit
+                level = 2  # Medium confidence inhibit (but < 3)
             
             if level is not None:
                 pattern = stats['pattern']
