@@ -205,6 +205,8 @@ class OrthosML:
         
         # Baseline patterns from existing .tex file
         self._baseline_patterns = []
+        self._parsed_patterns = {}
+        self._failure_indices = None
         
         # Training config
         self.batch_size = 64
@@ -253,11 +255,135 @@ class OrthosML:
                                 patterns.append(pat)
             
             self._baseline_patterns = patterns
+            
+            # Parse patterns into lookup structure
+            self._parsed_patterns = self._parse_patterns_for_lookup(patterns)
+            
             print(f"  Loaded {len(patterns)} baseline patterns from {filepath}")
             return True
         except Exception as e:
             print(f"Error loading baseline patterns: {e}")
             return False
+    
+    def _parse_patterns_for_lookup(self, patterns: List[str]) -> Dict[str, List[Tuple[int, int]]]:
+        """Parse TeX patterns into a lookup dictionary."""
+        parsed = {}
+        for pat in patterns:
+            if not pat or pat.startswith('%'):
+                continue
+            
+            # Extract letters and numbers
+            letters = ''.join(c for c in pat if not c.isdigit())
+            if not letters:
+                continue
+            
+            values = []
+            pos = 0
+            for i, c in enumerate(pat):
+                if c.isdigit():
+                    values.append((pos, int(c)))
+                else:
+                    pos += 1
+            
+            if letters not in parsed:
+                parsed[letters] = []
+            parsed[letters].extend(values)
+        
+        return parsed
+    
+    def hyphenate_word(self, word: str) -> str:
+        """
+        Hyphenate a word using baseline patterns.
+        
+        Args:
+            word: Word to hyphenate
+            
+        Returns:
+            Hyphenated word (e.g., 'a-ba-di')
+        """
+        if not self._parsed_patterns:
+            return word
+        
+        word_lower = word.lower()
+        padded = '.' + word_lower + '.'
+        values = [0] * (len(word_lower) + 1)
+        
+        # Apply all matching patterns
+        for i in range(len(padded)):
+            for length in range(1, len(padded) - i + 1):
+                substring = padded[i:i+length]
+                if substring in self._parsed_patterns:
+                    for pos, val in self._parsed_patterns[substring]:
+                        word_pos = i + pos - 1
+                        if 0 <= word_pos < len(values):
+                            values[word_pos] = max(values[word_pos], val)
+        
+        # Build hyphenated word (odd values = hyphen)
+        result = []
+        for i, c in enumerate(word_lower):
+            if i > 0 and values[i] % 2 == 1:
+                result.append('-')
+            result.append(c)
+        
+        return ''.join(result)
+    
+    def test_with_baseline(self, word: str, expected: str) -> bool:
+        """
+        Test if a word is correctly hyphenated by baseline patterns.
+        
+        Args:
+            word: Original word (without hyphens)
+            expected: Expected hyphenation (e.g., 'a-ba-di')
+            
+        Returns:
+            True if baseline produces correct result
+        """
+        actual = self.hyphenate_word(word)
+        return actual == expected
+    
+    def filter_training_data(self) -> Tuple[List[int], int, int]:
+        """
+        Filter training data to only words that FAIL with baseline.
+        
+        Returns:
+            Tuple of (failure_indices, num_passed, num_failed)
+        """
+        if self.dataset is None:
+            print("Error: Load dictionary first")
+            return [], 0, 0
+        
+        if not self._parsed_patterns:
+            print("Warning: No baseline patterns loaded, using all data")
+            return list(range(len(self.dataset))), 0, len(self.dataset)
+        
+        passed = 0
+        failed = 0
+        failure_indices = []
+        
+        for idx in range(len(self.dataset)):
+            word = self.dataset.words[idx]
+            label = self.dataset.labels[idx]
+            
+            # Build expected hyphenation
+            expected = ""
+            for i, c in enumerate(word):
+                expected += c
+                if i < len(label) and label[i] == 1:
+                    expected += "-"
+            
+            # Test with baseline
+            if self.test_with_baseline(word, expected):
+                passed += 1
+            else:
+                failed += 1
+                failure_indices.append(idx)
+        
+        print(f"  Baseline test: {passed} passed, {failed} failed ({100*failed/(passed+failed):.1f}% failures)")
+        
+        # Store for later use
+        self._failure_indices = failure_indices
+        
+        return failure_indices, passed, failed
     
     def load_dictionary_safe(self, filepath: str) -> bool:
         """
@@ -321,17 +447,29 @@ class OrthosML:
         self._thresh = thresh
         self._margins = (left_hyphen_min, right_hyphen_min)
         
-        # Setup training
-        train_size = int(0.9 * len(self.dataset))
-        val_size = len(self.dataset) - train_size
+        # Use filtered failures if available, otherwise full dataset
+        if self._failure_indices is not None and len(self._failure_indices) > 0:
+            print(f"  Training on {len(self._failure_indices)} failures (filtered)")
+            training_indices = self._failure_indices
+            subset = torch.utils.data.Subset(self.dataset, training_indices)
+        else:
+            print(f"  Training on full dataset ({len(self.dataset)} words)")
+            subset = self.dataset
         
-        generator = torch.Generator().manual_seed(42)
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            self.dataset, [train_size, val_size], generator=generator
-        )
+        # Setup training
+        train_size = int(0.9 * len(subset))
+        val_size = len(subset) - train_size
+        
+        if train_size < 10:
+            print(f"  Warning: Very small training set ({train_size}), using all data")
+            train_dataset = subset
+        else:
+            generator = torch.Generator().manual_seed(42)
+            train_dataset, _ = torch.utils.data.random_split(
+                subset, [train_size, val_size], generator=generator
+            )
         
         train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
         
         # Train
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
@@ -494,27 +632,27 @@ class OrthosML:
             avg_prob = sum(probs) / len(probs)
             
             # Multi-level based on confidence
-            # Level 1, 3, 5, 7, 9 = allow (odd) - higher = more confident
-            # Level 2, 4, 6, 8 = inhibit (even) - higher = more confident
-            # IMPORTANT: Allow levels must be >= inhibit levels to win
+            # Baseline uses levels 1-2, ML uses levels 3-9 for patching
+            # Level 3, 5, 7, 9 = allow (odd) - higher = more confident
+            # Level 4, 6, 8 = inhibit (even) - higher = more confident
+            # ML levels must be > 2 to override baseline when needed
             level = None
             
             if avg_prob > 0.95:
-                level = 9  # Very high confidence allow (highest priority)
+                level = 9  # Very high confidence allow
             elif avg_prob > 0.85:
                 level = 7  # High confidence allow
             elif avg_prob > 0.70:
                 level = 5  # Medium-high confidence allow
             elif avg_prob > 0.50:
-                level = 3  # Medium confidence allow
+                level = 3  # Medium confidence allow (lowest ML allow)
             elif avg_prob < 0.05:
-                level = 8  # Very high confidence inhibit (but < 9)
+                level = 8  # Very high confidence inhibit
             elif avg_prob < 0.15:
-                level = 6  # High confidence inhibit (but < 7)
+                level = 6  # High confidence inhibit
             elif avg_prob < 0.30:
-                level = 4  # Medium-high confidence inhibit (but < 5)
-            elif avg_prob < 0.50:
-                level = 2  # Medium confidence inhibit (but < 3)
+                level = 4  # Medium confidence inhibit (lowest ML inhibit)
+            # Skip level 2 - reserved for baseline inhibit
             
             if level is not None:
                 pattern = stats['pattern']
