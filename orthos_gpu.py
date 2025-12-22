@@ -262,10 +262,17 @@ class OrthosGPU:
 
     def sync_trie_to_gpu(self):
         if not self.gpu_available: return
+
+        # Optimization: Only transfer used portion of trie to GPU
+        # The trie buffer is large (27.5M) but mostly empty.
+        # Accessing indices > trie_max means accessing unallocated nodes (0).
+        # The kernel checks bounds (t >= shape[0]), so slicing is safe.
+        limit = self.trie_max + 1
+
         # Cast to int32 for GPU kernel compatibility (kernel uses int32 indexing)
-        self.d_trie_c = cp.asarray(self.trie_c.astype(np.int32))
-        self.d_trie_l = cp.asarray(self.trie_l.astype(np.int32))
-        self.d_trie_r = cp.asarray(self.trie_r.astype(np.int32))
+        self.d_trie_c = cp.asarray(self.trie_c[:limit].astype(np.int32))
+        self.d_trie_l = cp.asarray(self.trie_l[:limit].astype(np.int32))
+        self.d_trie_r = cp.asarray(self.trie_r[:limit].astype(np.int32))
 
         ops_val = np.zeros(MAX_OPS + 1, dtype=np.uint8)
         ops_dot = np.zeros(MAX_OPS + 1, dtype=np.uint8)
