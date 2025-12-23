@@ -66,6 +66,7 @@ MAX_DOT = 15
 MAX_LEN = 50
 TRIE_SIZE = 55000 * 500
 MAX_OPS = 510 * 100
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit
 
 # Character Classes
 DIGIT_CLASS = 1
@@ -463,8 +464,21 @@ class OrthosEngine:
 
         self.trie_r[s] = self.new_trie_op(val, dot, self.trie_r[s])
 
+    def validate_file(self, filepath):
+        """Validates that a file is safe to read (exists, is file, size limit)."""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"File not found: {filepath}")
+
+        if not os.path.isfile(filepath):
+            raise ValueError(f"Path is not a regular file: {filepath}")
+
+        size = os.path.getsize(filepath)
+        if size > MAX_FILE_SIZE:
+            raise ValueError(f"File {filepath} (size: {size} bytes) exceeds maximum allowed size of {MAX_FILE_SIZE} bytes.")
+
     def load_dictionary(self, filepath):
         print(f"📖 Loading dictionary from {filepath}...")
+        self.validate_file(filepath)
         words_list = []
         dots_list = []
         dotw_list = []
@@ -558,6 +572,8 @@ class OrthosEngine:
         if not os.path.exists(filepath):
             print(f"   File not found. Starting with empty patterns.")
             return
+
+        self.validate_file(filepath)
 
         with open(filepath, 'r', encoding='utf-8') as f:
             # Simple line based reading for now or TeX format?
@@ -970,4 +986,11 @@ def main():
     print("\n✅ Done.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n❌ Interrupted by user.")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\n❌ An unexpected error occurred: {type(e).__name__} - {str(e)}")
+        sys.exit(1)
