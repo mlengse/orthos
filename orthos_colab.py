@@ -50,8 +50,22 @@ install_dependencies()
 # IMPORTS
 # ==========================================
 try:
+    from numba import jit, prange, int32, uint32, float32, uint8
+except ImportError:
+    print("⚠️  Warning: Numba not found. CPU optimization will be disabled.")
+    def jit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    prange = range
+    int32 = int
+    uint32 = int
+    float32 = float
+    uint8 = int
+
+try:
     import cupy as cp
-    from numba import cuda, int32, uint32, float32, uint8
+    from numba import cuda
     GPU_AVAILABLE = True
 except ImportError:
     cp = None
@@ -147,8 +161,6 @@ if GPU_AVAILABLE:
         """
         Equivalent to change_dots() in orthos.js.
         Updates the 'dots' array based on calculated 'hvals'.
-        Also aggregates counts (requires atomic add if we want global stats,
-        but for pattern generation we mainly need the updated 'dots' state).
         """
         idx = cuda.grid(1)
         if idx >= dots.shape[0]:
@@ -161,19 +173,6 @@ if GPU_AVAILABLE:
             # If hval is odd, it means we found a hyphen here
             if (hvals[idx, dpos] % 2) == 1:
                 dots[idx, dpos] += 1
-
-            # Accumulate stats (Optional: for reporting only)
-            # We use atomic adds to global counters if needed,
-            # but for logic correctness, modifying 'dots' is the key.
-            # d_val = dots[idx, dpos]
-            # weight = dotw[idx, dpos]
-            # if d_val == found_hyf:
-            #     cuda.atomic.add(good_count, 0, weight)
-            # elif d_val == err_hyf:
-            #     cuda.atomic.add(bad_count, 0, weight)
-            # elif d_val == is_hyf:
-            #     cuda.atomic.add(miss_count, 0, weight)
-
             dpos -= 1
 
     @cuda.jit
@@ -214,6 +213,113 @@ if GPU_AVAILABLE:
 
                         out_mask[out_idx] = 1
 
+# ==========================================
+# CPU KERNELS (Numba Optimized)
+# ==========================================
+@jit(nopython=True, parallel=True)
+def kernel_hyphenate_cpu(words, word_lens, trie_c, trie_l, trie_r, ops_val, ops_dot, ops_op, trie_root, hvals, no_more, pat_len, pat_dot, hyph_level, max_val):
+    n_words = words.shape[0]
+    for idx in prange(n_words):
+        wlen = word_lens[idx]
+
+        # Iterate backwards through the word
+        for spos in range(wlen - 1, -1, -1):
+            fpos = spos + 1
+            if fpos >= MAX_LEN: continue
+            if fpos >= wlen: continue
+
+            char_code = words[idx, fpos]
+            t = int32(trie_root) + int32(char_code)
+
+            # Traverse Trie
+            while True:
+                # Bound check for t
+                if t >= trie_c.shape[0]: break
+
+                if trie_c[t] == char_code:
+                    h = trie_r[t]
+                    while h > 0:
+                        op_val = ops_val[h]
+                        op_dot = ops_dot[h]
+                        op_next = ops_op[h]
+
+                        dpos = spos + op_dot
+
+                        if dpos < MAX_LEN:
+                            # Update hvals
+                            if op_val < max_val:
+                                if hvals[idx, dpos] < op_val:
+                                    hvals[idx, dpos] = op_val
+
+                            # Update no_more
+                            if op_val >= hyph_level:
+                                cond1 = (fpos - pat_len) <= (dpos - pat_dot)
+                                cond2 = (dpos - pat_dot) <= spos
+                                if cond1 and cond2:
+                                    no_more[idx, dpos] = 1
+
+                        h = op_next
+
+                    t = int32(trie_l[t])
+                    if t == 0:
+                        break
+
+                    fpos += 1
+                    if fpos >= wlen:
+                        break
+                    char_code = words[idx, fpos]
+                    t = int32(t) + int32(char_code)
+                else:
+                    break
+
+@jit(nopython=True, parallel=True)
+def kernel_update_dots_cpu(dots, hvals, dotw, word_lens, hyf_min, hyf_max):
+    n_words = dots.shape[0]
+    for idx in prange(n_words):
+        wlen = word_lens[idx]
+        dpos = wlen - hyf_max
+
+        while dpos >= hyf_min:
+            # If hval is odd, it means we found a hyphen here
+            if (hvals[idx, dpos] % 2) == 1:
+                dots[idx, dpos] += 1
+            dpos -= 1
+
+@jit(nopython=True, parallel=True)
+def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
+                              pat_len, pat_dot, good_dot, bad_dot,
+                              dot_min, dot_max,
+                              out_patterns, out_weights, out_mask):
+    n_words = words.shape[0]
+    for idx in prange(n_words):
+        wlen = word_lens[idx]
+
+        # dpos loop: wlen - dot_max down to dot_min
+        for dpos in range(wlen - dot_max, dot_min - 1, -1):
+            if no_more[idx, dpos] == 0:
+                current_dot = dots[idx, dpos]
+                is_good = (current_dot == good_dot)
+                is_bad = (current_dot == bad_dot)
+
+                if is_good or is_bad:
+                    spos = dpos - pat_dot
+                    out_idx = idx * MAX_LEN + dpos
+
+                    # Check bounds
+                    if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
+                        for k in range(pat_len):
+                            out_patterns[out_idx, k] = words[idx, spos + 1 + k]
+
+                        weight = dotw[idx, dpos]
+
+                        if is_good:
+                            out_weights[out_idx, 0] = weight
+                            out_weights[out_idx, 1] = 0.0
+                        else:
+                            out_weights[out_idx, 0] = 0.0
+                            out_weights[out_idx, 1] = float(weight)
+
+                        out_mask[out_idx] = 1
 
 # ==========================================
 # ORTHOS ENGINE
@@ -671,8 +777,8 @@ class OrthosEngine:
 
     def do_dictionary_gpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
         if not self.gpu_available:
-            print("❌ GPU not available. Skipping generation.")
-            return 0, 0
+            print("⚠️ GPU not available. Switching to CPU.")
+            return self.do_dictionary_cpu(pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min)
 
         self.sync_trie_to_gpu()
         self.sync_dictionary_to_gpu()
@@ -682,16 +788,12 @@ class OrthosEngine:
         d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
         # We need a copy of dots because update_dots modifies it in-place for the kernel run
-        # but we don't want to persist these changes if the algorithm requires fresh start (actually orthos.js updates in memory?)
-        # orthos.js: "change_dots() -> dots[dpos] += 1". This persists for the word.
-        # But orthos.js reads dictionary from file *every* do_dictionary() pass, resetting the state!
-        # Thus, we MUST start with the original 'dots' every time.
-        d_dots_working = cp.array(self.d_dots, copy=True) # Make a working copy from the cached read-only dots
+        d_dots_working = cp.array(self.d_dots, copy=True)
 
         threadsperblock = 128
         blockspergrid = (n_words + (threadsperblock - 1)) // threadsperblock
 
-        # 1. Hyphenate (fill hvals based on CURRENT trie)
+        # 1. Hyphenate
         kernel_hyphenate[blockspergrid, threadsperblock](
             self.d_words, self.d_word_lens,
             self.d_trie_c, self.d_trie_l, self.d_trie_r,
@@ -704,8 +806,7 @@ class OrthosEngine:
         hyf_min = left_hyphen_min + 1
         hyf_max = right_hyphen_min + 1
 
-        # 2. Update Dots (Simulate change_dots: update dots array based on hvals)
-        # Dummy counters for now, we don't display stats during generation usually to save time
+        # 2. Update Dots
         d_good_count = cp.array([0], dtype=cp.uint32)
         d_bad_count = cp.array([0], dtype=cp.uint32)
         d_miss_count = cp.array([0], dtype=cp.uint32)
@@ -733,7 +834,7 @@ class OrthosEngine:
         d_out_weights = cp.zeros((n_words * MAX_LEN, 2), dtype=cp.float32)
         d_out_mask = cp.zeros((n_words * MAX_LEN), dtype=cp.uint8)
 
-        # 3. Extract Candidates using the UPDATED dots
+        # 3. Extract Candidates
         kernel_extract_candidates[blockspergrid, threadsperblock](
             self.d_words, self.d_word_lens, d_dots_working, self.d_dotw, d_no_more,
             pat_len, pat_dot, good_dot, bad_dot,
@@ -749,7 +850,7 @@ class OrthosEngine:
         if valid_patterns.shape[0] == 0:
             return 0, 0
 
-        # Lexsort for reduction
+        # Lexsort
         keys = cp.vstack([valid_patterns[:, i] for i in range(pat_len - 1, -1, -1)])
         sorted_indices = cp.lexsort(keys)
 
@@ -793,6 +894,115 @@ class OrthosEngine:
         
         return good_pat_count, bad_pat_count
 
+    def do_dictionary_cpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
+        """CPU Fallback implementation using Numba"""
+        print("   [CPU] Running processing on CPU...")
+
+        n_words = self.words.shape[0]
+        hvals = np.zeros((n_words, MAX_LEN), dtype=np.uint8, order='F')
+        no_more = np.zeros((n_words, MAX_LEN), dtype=np.uint8, order='F')
+
+        # Working copy of dots
+        dots_working = np.copy(self.dots)
+
+        # 1. Hyphenate
+        kernel_hyphenate_cpu(
+            self.words, self.word_lens,
+            self.trie_c, self.trie_l, self.trie_r,
+            self.ops_val, self.ops_dot, self.ops_op,
+            self.trie_root,
+            hvals, no_more,
+            pat_len, pat_dot, hyph_level, MAX_VAL
+        )
+
+        hyf_min = left_hyphen_min + 1
+        hyf_max = right_hyphen_min + 1
+
+        # 2. Update Dots
+        kernel_update_dots_cpu(
+            dots_working, hvals, self.dotw, self.word_lens,
+            hyf_min, hyf_max
+        )
+
+        if (hyph_level % 2) == 1:
+            good_dot = IS_HYF
+            bad_dot = NO_HYF
+        else:
+            good_dot = ERR_HYF
+            bad_dot = FOUND_HYF
+
+        dot_min = pat_dot
+        if dot_min < (left_hyphen_min + 1): dot_min = left_hyphen_min + 1
+        dot_max = pat_len - pat_dot
+        if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
+
+        # Pre-allocate output arrays
+        # Note: On CPU this might be large, but usually manageable for reasonable dictionary sizes.
+        # Max patterns = n_words * MAX_LEN.
+        out_patterns = np.zeros((n_words * MAX_LEN, pat_len), dtype=np.uint32)
+        out_weights = np.zeros((n_words * MAX_LEN, 2), dtype=np.float32)
+        out_mask = np.zeros((n_words * MAX_LEN), dtype=np.uint8)
+
+        # 3. Extract Candidates
+        kernel_extract_candidates_cpu(
+            self.words, self.word_lens, dots_working, self.dotw, no_more,
+            pat_len, pat_dot, good_dot, bad_dot,
+            dot_min, dot_max,
+            out_patterns, out_weights, out_mask
+        )
+
+        # Aggregation
+        mask = out_mask.astype(bool)
+        valid_patterns = out_patterns[mask]
+        valid_weights = out_weights[mask]
+
+        if valid_patterns.shape[0] == 0:
+            return 0, 0
+
+        # Lexsort (NumPy)
+        # np.lexsort takes keys in reverse order of significance
+        keys = tuple(valid_patterns[:, i] for i in range(pat_len - 1, -1, -1))
+        sorted_indices = np.lexsort(keys)
+
+        sorted_patterns = valid_patterns[sorted_indices]
+        sorted_weights = valid_weights[sorted_indices]
+
+        # Find boundaries
+        diff = sorted_patterns[1:] != sorted_patterns[:-1]
+        boundaries = np.any(diff, axis=1)
+
+        run_ids = np.zeros(len(sorted_patterns), dtype=np.int32)
+        run_ids[1:] = np.cumsum(boundaries)
+
+        num_unique = int(run_ids[-1]) + 1
+        unique_weights = np.zeros((num_unique, 2), dtype=np.float32)
+
+        # Aggregation loop (np.add.at is slow, simple loop might be faster for CPU or stick to np.add.at)
+        np.add.at(unique_weights, run_ids, sorted_weights)
+
+        change_points = np.flatnonzero(boundaries) + 1
+        unique_indices = np.concatenate((np.array([0]), change_points))
+        unique_patterns_arr = sorted_patterns[unique_indices]
+
+        good_pat_count = 0
+        bad_pat_count = 0
+
+        for i in range(num_unique):
+            w_good = unique_weights[i, 0]
+            w_bad = unique_weights[i, 1]
+            pat = unique_patterns_arr[i].tolist()
+            try:
+                if (good_wt * w_good) < thresh:
+                    self.insert_pattern(pat, MAX_VAL, pat_dot)
+                    bad_pat_count += 1
+                elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
+                    self.insert_pattern(pat, hyph_level, pat_dot)
+                    good_pat_count += 1
+            except RuntimeError:
+                pass
+
+        return good_pat_count, bad_pat_count
+
     def export_patterns(self, filename):
         patterns_list = []
         self._collect_patterns(self.trie_root, [], patterns_list)
@@ -833,53 +1043,100 @@ class OrthosEngine:
         """
         Runs a small deterministic test to validate logic without GPU (if possible)
         or with GPU if available.
-        This mirrors a small subset of PatGen to ensure '1a' pattern works.
         """
         print("\n🧪 Running Self-Test Validation...")
 
-        # 1. Ensure 'a' exists in char map
-        if ord('a') not in self.xint:
-             self.xext.append('a')
-             self.xint[ord('a')] = len(self.xext) - 1
-             self.xclass[ord('a')] = LETTER_CLASS
-             self.cmax = len(self.xext) - 1
+        # 1. Initialize Dummy Dictionary
+        # We need a small dictionary to test hyphenation
+        # Let's say we have the word 'foobar' and we want to break it as foo-bar.
+        # So words: .foobar.
+        # dots:     00000000  (Assuming no hyphen in input dictionary)
+        # dotw:     11111111
 
-        # 2. Reset Trie with updated char map
+        # Reset engine
+        self.words = None
+        self.word_lens = None
+        self.dots = None
+        self.dotw = None
+
+        # Ensure 'a' exists (and others)
+        for char in "abcdefghijklmnopqrstuvwxyz.":
+            code = ord(char)
+            if code not in self.xint:
+                 self.xext.append(char)
+                 self.xint[code] = len(self.xext) - 1
+                 self.xclass[code] = LETTER_CLASS
+                 self.cmax = len(self.xext) - 1
+
+        # Reset Trie
         self.trie_c[:] = 0
         self.trie_l[:] = 0
         self.trie_r[:] = 0
         self.trie_taken[:] = 0
-
         self.ops_val[:] = 0
         self.ops_dot[:] = 0
         self.ops_op[:] = 0
-
         self.op_count = 0
         self.trie_max = 0
         self.trie_bmax = 0
         self.init_pattern_trie()
 
-        # 3. Add '1a' pattern manually
-        idx_a = self.xint[ord('a')]
-        self.insert_pattern([idx_a], 1, 0) # 1a
+        # Insert pattern '1b' (hyphenate before b)
+        # In 'foobar', b is at index 4 (0-based: . f o o b a r .)
+        # . is 0, f is 1...
+        # Let's use internal indices.
 
-        # 3. Test Hyphenation on 'a' (should be '-a')
-        # We can't easily run the GPU kernel here without context,
-        # but we can check if the Trie contains the pattern.
+        # Construct a dummy dictionary entry manually WITH A HYPHEN
+        # Word: "foobar" -> .foo-bar.
+        # We represent this as ".foobar." with dots array having a hyphen mark.
+        word_str = ".foobar."
+        word_ints = [self.xint[ord(c)] for c in word_str]
+
+        self.words = np.array([word_ints + [0]*(MAX_LEN-len(word_ints))], dtype=np.uint32, order='F')
+        self.word_lens = np.array([len(word_ints)], dtype=np.int32)
+
+        # Initialize dots: All NO_HYF except at 'o' (index 3) which means hyphen AFTER 'o' (before 'b')
+        self.dots = np.zeros_like(self.words) + NO_HYF
+        # 0 1 2 3 4 5 6 7
+        # . f o o b a r .
+        # Hyphen after 2nd 'o' (index 3).
+        self.dots[0, 3] = IS_HYF
+
+        self.dotw = np.ones_like(self.words)
+
+        print("   Dictionary initialized with '.foo-bar.' (hyphen before b).")
+        print("   Running generation (Level 1) to rediscover this hyphen...")
+
+        # Run do_dictionary (Level 1)
+        # It should find patterns that explain this hyphen.
+        # We look for patterns of length 1, dot 0 (i.e. 'b' at the hyphen).
+        good, bad = self.do_dictionary_gpu(
+            pat_len=1, pat_dot=0, hyph_level=1,
+            good_wt=1, bad_wt=1, thresh=1,
+            left_hyphen_min=1, right_hyphen_min=1
+        )
+
+        if good > 0:
+            print(f"   ✅ Logic Test Passed: Found {good} good patterns (Expected > 0).")
+        else:
+            print(f"   ❌ Logic Test Failed: Found {good} good patterns.")
+
+        # Verify '1b' was inserted
         pats = []
         self._collect_patterns(self.trie_root, [], pats)
-
-        found = False
+        # We expect ('b', 1, 0)
+        found_b = False
         for p, v, d in pats:
-            if p == 'a' and v == 1 and d == 0:
-                found = True
+            if p == 'b' and v == 1 and d == 0:
+                found_b = True
 
-        if found:
-            print("   ✅ Pattern Insertion Test Passed (Found '1a')")
+        if not found_b:
+            print(f"   ℹ️ Patterns found: {pats}")
+
+        if found_b:
+             print("   ✅ Pattern Verification Passed: '1b' (b, 1, 0) was generated.")
         else:
-            print("   ❌ Pattern Insertion Test Failed")
-
-        print("   (Full functional test requires GPU execution flow)")
+             print("   ❌ Pattern Verification Failed: '1b' not generated.")
 
 
 # ==========================================
@@ -919,9 +1176,9 @@ def input_gbt():
 
 def main():
     parser = argparse.ArgumentParser(description="Orthos PatGen on GPU")
-    parser.add_argument("dictionary", help="Path to dictionary file")
-    parser.add_argument("pattern_in", help="Path to input pattern file")
-    parser.add_argument("pattern_out", help="Path to output pattern file")
+    parser.add_argument("dictionary", nargs='?', help="Path to dictionary file")
+    parser.add_argument("pattern_in", nargs='?', help="Path to input pattern file")
+    parser.add_argument("pattern_out", nargs='?', help="Path to output pattern file")
     parser.add_argument("--validate", action="store_true", help="Run validation logic only")
     args = parser.parse_args()
 
@@ -937,6 +1194,10 @@ def main():
     if args.validate:
         engine.validate_logic()
         return
+
+    if not args.dictionary or not args.pattern_in or not args.pattern_out:
+        parser.print_help()
+        sys.exit(1)
 
     # Load Data
     engine.load_dictionary(args.dictionary)
