@@ -231,7 +231,12 @@ class OrthosEngine:
         self.trie_l = np.zeros(self.trie_size, dtype=np.int64)
         self.trie_r = np.zeros(self.trie_size, dtype=np.int64)
         self.trie_taken = np.zeros(self.trie_size, dtype=np.uint8)
-        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(self.max_ops + 1)] # 1-based
+
+        # Structure of Arrays (SoA) for OPS to avoid Python loop overhead in sync
+        self.ops_val = np.zeros(self.max_ops + 1, dtype=np.uint8)
+        self.ops_dot = np.zeros(self.max_ops + 1, dtype=np.uint8)
+        self.ops_op = np.zeros(self.max_ops + 1, dtype=np.uint32)
+        # self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(self.max_ops + 1)] # 1-based (REMOVED)
 
         # Trie packing structures
         self.trieq_c = np.zeros(50, dtype=np.int64)
@@ -322,18 +327,10 @@ class OrthosEngine:
         self.d_trie_l = cp.asarray(self.trie_l[:limit].astype(np.int32))
         self.d_trie_r = cp.asarray(self.trie_r[:limit].astype(np.int32))
 
-        ops_val = np.zeros(MAX_OPS + 1, dtype=np.uint8)
-        ops_dot = np.zeros(MAX_OPS + 1, dtype=np.uint8)
-        ops_op = np.zeros(MAX_OPS + 1, dtype=np.uint32)
-
-        for i in range(1, MAX_OPS + 1):
-            ops_val[i] = self.ops[i]['val']
-            ops_dot[i] = self.ops[i]['dot']
-            ops_op[i] = self.ops[i]['op']
-
-        self.d_ops_val = cp.asarray(ops_val)
-        self.d_ops_dot = cp.asarray(ops_dot)
-        self.d_ops_op = cp.asarray(ops_op)
+        # Optimized Transfer: Direct array copy (No Python loop)
+        self.d_ops_val = cp.asarray(self.ops_val)
+        self.d_ops_dot = cp.asarray(self.ops_dot)
+        self.d_ops_op = cp.asarray(self.ops_op)
 
     def sync_dictionary_to_gpu(self):
         if not self.gpu_available: return
@@ -408,15 +405,15 @@ class OrthosEngine:
     def new_trie_op(self, val, dot, next_op):
         h = ((next_op + 313 * dot + 361 * val) % MAX_OPS) + 1
         while True:
-            if self.ops[h]['val'] == 0:
+            if self.ops_val[h] == 0:
                 self.op_count += 1
                 if self.op_count == MAX_OPS:
                     raise RuntimeError("Outputs Overflow")
-                self.ops[h]['val'] = val
-                self.ops[h]['dot'] = dot
-                self.ops[h]['op'] = next_op
+                self.ops_val[h] = val
+                self.ops_dot[h] = dot
+                self.ops_op[h] = next_op
                 return h
-            if (self.ops[h]['val'] == val and self.ops[h]['dot'] == dot and self.ops[h]['op'] == next_op):
+            if (self.ops_val[h] == val and self.ops_dot[h] == dot and self.ops_op[h] == next_op):
                 return h
             if h > 1:
                 h -= 1
@@ -544,7 +541,11 @@ class OrthosEngine:
         self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int64)
         self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int64)
         self.trie_taken = np.zeros(TRIE_SIZE, dtype=np.uint8)
-        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(MAX_OPS + 1)]
+
+        self.ops_val[:] = 0
+        self.ops_dot[:] = 0
+        self.ops_op[:] = 0
+
         self.op_count = 0
         self.trie_max = 0
         self.trie_bmax = 0
@@ -622,8 +623,8 @@ class OrthosEngine:
                 ops_list = []
                 h = int(self.trie_r[t])
                 while h > 0:
-                    ops_list.append((self.ops[h]['val'], self.ops[h]['dot'], self.ops[h]['op']))
-                    h = self.ops[h]['op']
+                    ops_list.append((self.ops_val[h], self.ops_dot[h], self.ops_op[h]))
+                    h = self.ops_op[h]
                 new_head = 0
                 for val, dot, _ in reversed(ops_list):
                     if val != MAX_VAL and val > 0:
@@ -648,8 +649,8 @@ class OrthosEngine:
     def delete_bad_patterns(self):
         self.delete_patterns(self.trie_root)
         for h in range(1, MAX_OPS + 1):
-            if self.ops[h]['val'] == MAX_VAL:
-                self.ops[h]['val'] = 0
+            if self.ops_val[h] == MAX_VAL:
+                self.ops_val[h] = 0
         self.qmax_thresh = 7
 
     def do_dictionary_gpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
@@ -802,12 +803,12 @@ class OrthosEngine:
                 new_prefix = prefix + [c]
                 h = int(self.trie_r[t])
                 while h > 0:
-                    val = self.ops[h]['val']
-                    dot = self.ops[h]['dot']
+                    val = self.ops_val[h]
+                    dot = self.ops_dot[h]
                     if val > 0 and val < MAX_VAL:
                         pat_str = ''.join(self.xext[ch] if ch < len(self.xext) else '?' for ch in new_prefix)
                         patterns_list.append((pat_str, val, dot))
-                    h = self.ops[h]['op']
+                    h = self.ops_op[h]
                 child = int(self.trie_l[t])
                 if child > 0:
                     self._collect_patterns(child, new_prefix, patterns_list)
@@ -832,7 +833,11 @@ class OrthosEngine:
         self.trie_l[:] = 0
         self.trie_r[:] = 0
         self.trie_taken[:] = 0
-        self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(self.max_ops + 1)]
+
+        self.ops_val[:] = 0
+        self.ops_dot[:] = 0
+        self.ops_op[:] = 0
+
         self.op_count = 0
         self.trie_max = 0
         self.trie_bmax = 0
