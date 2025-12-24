@@ -334,10 +334,14 @@ class OrthosEngine:
         self.trie_size = TRIE_SIZE
         self.max_ops = MAX_OPS
         
-        self.trie_c = np.zeros(self.trie_size, dtype=np.int64)
-        self.trie_l = np.zeros(self.trie_size, dtype=np.int64)
-        self.trie_r = np.zeros(self.trie_size, dtype=np.int64)
+        # Optimization: Use int32 for Trie arrays to save 50% memory (27.5M ints)
+        # and avoid casting during GPU transfer.
+        self.trie_c = np.zeros(self.trie_size, dtype=np.int32)
+        self.trie_l = np.zeros(self.trie_size, dtype=np.int32)
+        self.trie_r = np.zeros(self.trie_size, dtype=np.int32)
         self.trie_taken = np.zeros(self.trie_size, dtype=np.uint8)
+
+        self.trie_dirty = True
 
         # Structure of Arrays (SoA) for OPS to avoid Python loop overhead in sync
         self.ops_val = np.zeros(self.max_ops + 1, dtype=np.uint8)
@@ -424,15 +428,20 @@ class OrthosEngine:
 
         self.trie_l[0] = self.trie_max + 1
         self.trie_r[self.trie_max + 1] = 0
+        self.trie_dirty = True
 
     def sync_trie_to_gpu(self):
         if not self.gpu_available: return
+        if not self.trie_dirty: return
 
         limit = self.trie_max + 1
 
-        self.d_trie_c = cp.asarray(self.trie_c[:limit].astype(np.int32))
-        self.d_trie_l = cp.asarray(self.trie_l[:limit].astype(np.int32))
-        self.d_trie_r = cp.asarray(self.trie_r[:limit].astype(np.int32))
+        # Optimization: Remove astype(int32) since arrays are already int32
+        self.d_trie_c = cp.asarray(self.trie_c[:limit])
+        self.d_trie_l = cp.asarray(self.trie_l[:limit])
+        self.d_trie_r = cp.asarray(self.trie_r[:limit])
+
+        self.trie_dirty = False
 
         # Optimized Transfer: Direct array copy (No Python loop)
         self.d_ops_val = cp.asarray(self.ops_val)
@@ -569,6 +578,7 @@ class OrthosEngine:
             s = t + pat[i]
 
         self.trie_r[s] = self.new_trie_op(val, dot, self.trie_r[s])
+        self.trie_dirty = True
 
     def validate_file(self, filepath):
         """Validates that a file is safe to read (exists, is file, size limit)."""
@@ -657,9 +667,9 @@ class OrthosEngine:
         self.d_words = None
 
         # Reset Trie (new chars might have been added)
-        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int64)
-        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int64)
-        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int64)
+        self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int32)
+        self.trie_l = np.zeros(TRIE_SIZE, dtype=np.int32)
+        self.trie_r = np.zeros(TRIE_SIZE, dtype=np.int32)
         self.trie_taken = np.zeros(TRIE_SIZE, dtype=np.uint8)
 
         self.ops_val[:] = 0
@@ -766,10 +776,12 @@ class OrthosEngine:
         if all_freed:
             self.trie_taken[s] = 0
             s = 0
+        self.trie_dirty = True
         return s
 
     def delete_bad_patterns(self):
         self.delete_patterns(self.trie_root)
+        self.trie_dirty = True
         for h in range(1, MAX_OPS + 1):
             if self.ops_val[h] == MAX_VAL:
                 self.ops_val[h] = 0
