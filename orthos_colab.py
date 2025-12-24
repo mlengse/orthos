@@ -592,6 +592,25 @@ class OrthosEngine:
         if size > MAX_FILE_SIZE:
             raise ValueError(f"File {filepath} (size: {size} bytes) exceeds maximum allowed size of {MAX_FILE_SIZE} bytes.")
 
+    def validate_output_file(self, filepath):
+        """
+        Validates that the output path is safe to write to.
+        - Must not be a directory.
+        - Parent directory must exist.
+        - If file exists, must be a regular file.
+        """
+        if os.path.isdir(filepath):
+            raise IsADirectoryError(f"Output path is a directory: {filepath}")
+
+        parent = os.path.dirname(os.path.abspath(filepath))
+        if not os.path.exists(parent):
+            raise FileNotFoundError(f"Parent directory does not exist: {parent}")
+        if not os.path.isdir(parent):
+            raise NotADirectoryError(f"Parent path is not a directory: {parent}")
+
+        if os.path.exists(filepath) and not os.path.isfile(filepath):
+             raise ValueError(f"Output path exists but is not a regular file: {filepath}")
+
     def load_dictionary(self, filepath):
         print(f"📖 Loading dictionary from {filepath}...")
         self.validate_file(filepath)
@@ -1209,6 +1228,13 @@ def main():
 
     if not args.dictionary or not args.pattern_in or not args.pattern_out:
         parser.print_help()
+        sys.exit(1)
+
+    # Security Check: Output Path
+    try:
+        engine.validate_output_file(args.pattern_out)
+    except Exception as e:
+        print(f"\n❌ Security Error: {e}")
         sys.exit(1)
 
     # Load Data
