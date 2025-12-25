@@ -106,6 +106,17 @@ if GPU_AVAILABLE:
         if idx >= words.shape[0]:
             return
 
+        # BOLT OPTIMIZATION: Use Local Memory for accumulation
+        # Buffering hvals/no_more in registers/L1 cache reduces global memory traffic
+        # and allows for coalesced burst writes at the end.
+        l_hvals = cuda.local.array(MAX_LEN, uint8)
+        l_no_more = cuda.local.array(MAX_LEN, uint8)
+
+        # Initialize local buffers
+        for i in range(MAX_LEN):
+            l_hvals[i] = 0
+            l_no_more[i] = 0
+
         wlen = word_lens[idx]
 
         # Iterate backwards through the word
@@ -134,15 +145,15 @@ if GPU_AVAILABLE:
                         if dpos < MAX_LEN:
                             # Update hvals
                             if op_val < max_val:
-                                if hvals[idx, dpos] < op_val:
-                                    hvals[idx, dpos] = op_val
+                                if l_hvals[dpos] < op_val:
+                                    l_hvals[dpos] = op_val
 
                             # Update no_more
                             if op_val >= hyph_level:
                                 cond1 = (fpos - pat_len) <= (dpos - pat_dot)
                                 cond2 = (dpos - pat_dot) <= spos
                                 if cond1 and cond2:
-                                    no_more[idx, dpos] = 1
+                                    l_no_more[dpos] = 1
 
                         h = op_next
 
@@ -157,6 +168,16 @@ if GPU_AVAILABLE:
                     t = int32(t) + int32(char_code)
                 else:
                     break
+
+        # Flush local buffers to global memory (Coalesced Write)
+        for i in range(MAX_LEN):
+            # Only write if non-zero to save bandwidth?
+            # Actually, we need to overwrite the output buffer (which was reset to 0).
+            # Writing 0 is fine.
+            # hvals is (N, MAX_LEN) F-order -> hvals[idx, i] = hvals[idx + i*N]
+            # Adjacent threads (idx, idx+1) write to adjacent addresses. Perfect.
+            hvals[idx, i] = l_hvals[i]
+            no_more[idx, i] = l_no_more[i]
 
     @cuda.jit
     def kernel_update_dots(dots, hvals, dotw, word_lens, hyf_min, hyf_max,
@@ -199,23 +220,23 @@ if GPU_AVAILABLE:
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    out_idx = idx * MAX_LEN + dpos
+                    # out_idx = idx * MAX_LEN + dpos (REMOVED: Use coalesced indexing [idx, dpos, k])
 
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
-                            out_patterns[out_idx, k] = words[idx, spos + 1 + k]
+                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
 
                         weight = dotw[idx, dpos]
 
                         if is_good:
-                            out_weights[out_idx, 0] = weight
-                            out_weights[out_idx, 1] = 0.0
+                            out_weights[idx, dpos, 0] = weight
+                            out_weights[idx, dpos, 1] = 0.0
                         else:
-                            out_weights[out_idx, 0] = 0.0
-                            out_weights[out_idx, 1] = float(weight)
+                            out_weights[idx, dpos, 0] = 0.0
+                            out_weights[idx, dpos, 1] = float(weight)
 
-                        out_mask[out_idx] = 1
+                        out_mask[idx, dpos] = 1
 
 # ==========================================
 # CPU KERNELS (Numba Optimized)
@@ -307,23 +328,23 @@ def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    out_idx = idx * MAX_LEN + dpos
+                    # out_idx = idx * MAX_LEN + dpos (REMOVED)
 
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
-                            out_patterns[out_idx, k] = words[idx, spos + 1 + k]
+                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
 
                         weight = dotw[idx, dpos]
 
                         if is_good:
-                            out_weights[out_idx, 0] = weight
-                            out_weights[out_idx, 1] = 0.0
+                            out_weights[idx, dpos, 0] = weight
+                            out_weights[idx, dpos, 1] = 0.0
                         else:
-                            out_weights[out_idx, 0] = 0.0
-                            out_weights[out_idx, 1] = float(weight)
+                            out_weights[idx, dpos, 0] = 0.0
+                            out_weights[idx, dpos, 1] = float(weight)
 
-                        out_mask[out_idx] = 1
+                        out_mask[idx, dpos] = 1
 
 # ==========================================
 # ORTHOS ENGINE
@@ -379,6 +400,12 @@ class OrthosEngine:
         self.d_word_lens = None
         self.d_dots = None
         self.d_dotw = None
+
+        # GPU Workspace Buffers (Pre-allocated)
+        self.d_hvals = None
+        self.d_no_more = None
+        self.d_dots_working = None
+        self.d_out_mask = None
 
         self.gpu_available = False
         if GPU_AVAILABLE:
@@ -462,6 +489,17 @@ class OrthosEngine:
         self.d_word_lens = cp.asarray(self.word_lens)
         self.d_dots = cp.asarray(self.dots, order='F')
         self.d_dotw = cp.asarray(self.dotw, order='F')
+
+        # BOLT OPTIMIZATION: Pre-allocate workspace buffers
+        # Avoids repeating malloc/free in the inner generation loop
+        print("   [GPU] Allocating workspace buffers...")
+        n_words = self.words.shape[0]
+        self.d_hvals = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+        self.d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+        # d_dots_working must be same shape/type as d_dots
+        self.d_dots_working = cp.zeros_like(self.d_dots)
+        # d_out_mask is also constant size
+        self.d_out_mask = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
     def unpack(self, s):
         qmax = 1
@@ -705,6 +743,10 @@ class OrthosEngine:
 
         # Reset Cache
         self.d_words = None
+        self.d_hvals = None
+        self.d_no_more = None
+        self.d_dots_working = None
+        self.d_out_mask = None
 
         # Reset Trie (new chars might have been added)
         self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int32)
@@ -830,11 +872,14 @@ class OrthosEngine:
         self.sync_dictionary_to_gpu()
 
         n_words = self.words.shape[0]
-        d_hvals = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
-        d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
-        # We need a copy of dots because update_dots modifies it in-place for the kernel run
-        d_dots_working = cp.array(self.d_dots, copy=True)
+        # Reuse pre-allocated buffers
+        # Reset them to 0 or initial state
+        self.d_hvals.fill(0)
+        self.d_no_more.fill(0)
+
+        # Reset dots working copy efficiently
+        cp.copyto(self.d_dots_working, self.d_dots)
 
         threadsperblock = 128
         blockspergrid = (n_words + (threadsperblock - 1)) // threadsperblock
@@ -845,7 +890,7 @@ class OrthosEngine:
             self.d_trie_c, self.d_trie_l, self.d_trie_r,
             self.d_ops_val, self.d_ops_dot, self.d_ops_op,
             self.trie_root,
-            d_hvals, d_no_more,
+            self.d_hvals, self.d_no_more,
             pat_len, pat_dot, hyph_level, MAX_VAL
         )
 
@@ -858,7 +903,7 @@ class OrthosEngine:
         d_miss_count = cp.array([0], dtype=cp.uint32)
 
         kernel_update_dots[blockspergrid, threadsperblock](
-            d_dots_working, d_hvals, self.d_dotw, self.d_word_lens,
+            self.d_dots_working, self.d_hvals, self.d_dotw, self.d_word_lens,
             hyf_min, hyf_max,
             FOUND_HYF, ERR_HYF, IS_HYF,
             d_good_count, d_bad_count, d_miss_count
@@ -876,20 +921,26 @@ class OrthosEngine:
         dot_max = pat_len - pat_dot
         if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
 
-        d_out_patterns = cp.zeros((n_words * MAX_LEN, pat_len), dtype=cp.uint32)
-        d_out_weights = cp.zeros((n_words * MAX_LEN, 2), dtype=cp.float32)
-        d_out_mask = cp.zeros((n_words * MAX_LEN), dtype=cp.uint8)
+        # BOLT OPTIMIZATION: Use Coalesced Memory Layout (order='F')
+        # Structure: (n_words, MAX_LEN, pat_len)
+        # This ensures threads accessing the same 'k' and 'dpos' but different 'idx' (word index)
+        # access adjacent memory locations, maximizing memory bandwidth.
+        d_out_patterns = cp.zeros((n_words, MAX_LEN, pat_len), dtype=cp.uint32, order='F')
+        d_out_weights = cp.zeros((n_words, MAX_LEN, 2), dtype=cp.float32, order='F')
+
+        # Reuse pre-allocated mask (reset to 0)
+        self.d_out_mask.fill(0)
 
         # 3. Extract Candidates
         kernel_extract_candidates[blockspergrid, threadsperblock](
-            self.d_words, self.d_word_lens, d_dots_working, self.d_dotw, d_no_more,
+            self.d_words, self.d_word_lens, self.d_dots_working, self.d_dotw, self.d_no_more,
             pat_len, pat_dot, good_dot, bad_dot,
             dot_min, dot_max,
-            d_out_patterns, d_out_weights, d_out_mask
+            d_out_patterns, d_out_weights, self.d_out_mask
         )
 
         # Aggregation
-        mask = d_out_mask.astype(bool)
+        mask = self.d_out_mask.astype(bool)
         valid_patterns = d_out_patterns[mask]
         valid_weights = d_out_weights[mask]
 
@@ -983,11 +1034,10 @@ class OrthosEngine:
         if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
 
         # Pre-allocate output arrays
-        # Note: On CPU this might be large, but usually manageable for reasonable dictionary sizes.
-        # Max patterns = n_words * MAX_LEN.
-        out_patterns = np.zeros((n_words * MAX_LEN, pat_len), dtype=np.uint32)
-        out_weights = np.zeros((n_words * MAX_LEN, 2), dtype=np.float32)
-        out_mask = np.zeros((n_words * MAX_LEN), dtype=np.uint8)
+        # Updated to match GPU layout (order='F') for consistency
+        out_patterns = np.zeros((n_words, MAX_LEN, pat_len), dtype=np.uint32, order='F')
+        out_weights = np.zeros((n_words, MAX_LEN, 2), dtype=np.float32, order='F')
+        out_mask = np.zeros((n_words, MAX_LEN), dtype=np.uint8, order='F')
 
         # 3. Extract Candidates
         kernel_extract_candidates_cpu(
