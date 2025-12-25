@@ -589,6 +589,10 @@ class OrthosEngine:
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File not found: {filepath}")
 
+        # Security: Prevent symlink traversal
+        if os.path.islink(filepath):
+            raise ValueError(f"Security: Input path is a symlink, which is not allowed: {filepath}")
+
         if not os.path.isfile(filepath):
             raise ValueError(f"Path is not a regular file: {filepath}")
 
@@ -602,7 +606,12 @@ class OrthosEngine:
         - Must not be a directory.
         - Parent directory must exist.
         - If file exists, must be a regular file.
+        - Must not be a symlink.
         """
+        # Security: Prevent symlink traversal (writing to symlink target)
+        if os.path.islink(filepath):
+            raise ValueError(f"Security: Output path is a symlink, which is not allowed: {filepath}")
+
         if os.path.isdir(filepath):
             raise IsADirectoryError(f"Output path is a directory: {filepath}")
 
