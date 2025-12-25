@@ -106,6 +106,17 @@ if GPU_AVAILABLE:
         if idx >= words.shape[0]:
             return
 
+        # BOLT OPTIMIZATION: Use Local Memory for accumulation
+        # Buffering hvals/no_more in registers/L1 cache reduces global memory traffic
+        # and allows for coalesced burst writes at the end.
+        l_hvals = cuda.local.array(MAX_LEN, uint8)
+        l_no_more = cuda.local.array(MAX_LEN, uint8)
+
+        # Initialize local buffers
+        for i in range(MAX_LEN):
+            l_hvals[i] = 0
+            l_no_more[i] = 0
+
         wlen = word_lens[idx]
 
         # Iterate backwards through the word
@@ -134,15 +145,15 @@ if GPU_AVAILABLE:
                         if dpos < MAX_LEN:
                             # Update hvals
                             if op_val < max_val:
-                                if hvals[idx, dpos] < op_val:
-                                    hvals[idx, dpos] = op_val
+                                if l_hvals[dpos] < op_val:
+                                    l_hvals[dpos] = op_val
 
                             # Update no_more
                             if op_val >= hyph_level:
                                 cond1 = (fpos - pat_len) <= (dpos - pat_dot)
                                 cond2 = (dpos - pat_dot) <= spos
                                 if cond1 and cond2:
-                                    no_more[idx, dpos] = 1
+                                    l_no_more[dpos] = 1
 
                         h = op_next
 
@@ -157,6 +168,16 @@ if GPU_AVAILABLE:
                     t = int32(t) + int32(char_code)
                 else:
                     break
+
+        # Flush local buffers to global memory (Coalesced Write)
+        for i in range(MAX_LEN):
+            # Only write if non-zero to save bandwidth?
+            # Actually, we need to overwrite the output buffer (which was reset to 0).
+            # Writing 0 is fine.
+            # hvals is (N, MAX_LEN) F-order -> hvals[idx, i] = hvals[idx + i*N]
+            # Adjacent threads (idx, idx+1) write to adjacent addresses. Perfect.
+            hvals[idx, i] = l_hvals[i]
+            no_more[idx, i] = l_no_more[i]
 
     @cuda.jit
     def kernel_update_dots(dots, hvals, dotw, word_lens, hyf_min, hyf_max,
