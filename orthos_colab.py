@@ -13,7 +13,7 @@ import os
 import time
 import argparse
 import subprocess
-import numpy as np
+import re
 
 # ==========================================
 # AUTO-INSTALL DEPENDENCIES (COLAB)
@@ -30,9 +30,10 @@ def install_dependencies():
         try:
             import cupy
             import numba
+            import numpy
             print("   Dependencies already installed.")
         except ImportError:
-            print("   Installing CuPy and Numba...")
+            print("   Installing CuPy, Numba, and NumPy...")
             subprocess.check_call([sys.executable, "-m", "pip", "install"] + packages)
             print("   Installation complete.")
     else:
@@ -40,6 +41,7 @@ def install_dependencies():
         try:
             import cupy
             import numba
+            import numpy
         except ImportError:
             print("⚠️  Warning: CuPy or Numba not found. GPU acceleration will not work.")
             print("   Please install them: pip install numpy numba cupy-cuda12x")
@@ -49,6 +51,8 @@ install_dependencies()
 # ==========================================
 # IMPORTS
 # ==========================================
+import numpy as np
+
 try:
     from numba import jit, prange, int32, uint32, float32, uint8
 except ImportError:
@@ -519,7 +523,7 @@ class OrthosEngine:
         return s
 
     def new_trie_op(self, val, dot, next_op):
-        h = ((next_op + 313 * dot + 361 * val) % MAX_OPS) + 1
+        h = ((int(next_op) + 313 * int(dot) + 361 * int(val)) % MAX_OPS) + 1
         while True:
             if self.ops_val[h] == 0:
                 self.op_count += 1
@@ -677,6 +681,14 @@ class OrthosEngine:
                 dots_list.append(dots)
                 dotw_list.append(dotw)
 
+        # GPU OPTIMIZATION: Sort by word length
+        # This reduces warp divergence in the GPU kernel because threads in a block
+        # will process words of similar length and finish at similar times.
+        if words_list:
+            combined = list(zip(words_list, dots_list, dotw_list, lens_list))
+            combined.sort(key=lambda x: x[3]) # Sort by length
+            words_list, dots_list, dotw_list, lens_list = zip(*combined)
+
         self.words = np.array(words_list, dtype=np.uint32, order='F')
         self.dots = np.array(dots_list, dtype=np.uint32, order='F')
         self.dotw = np.array(dotw_list, dtype=np.uint32, order='F')
@@ -700,7 +712,7 @@ class OrthosEngine:
         self.trie_bmax = 0
         self.init_pattern_trie()
 
-        print(f"   Loaded {len(words_list)} words.")
+        print(f"   Loaded {len(words_list)} words (Sorted by length).")
 
     def load_patterns(self, filepath):
         print(f"📖 Loading patterns from {filepath}...")
@@ -711,15 +723,9 @@ class OrthosEngine:
         self.validate_file(filepath)
 
         with open(filepath, 'r', encoding='utf-8') as f:
-            # Simple line based reading for now or TeX format?
-            # Orthos.js read_patterns handled simple line based where chars have classes.
-            # Assuming TeX-like or simple list.
-            # Let's support standard TeX format as seen in orthos_gpu.py
             content = f.read()
 
         # Parse TeX patterns
-        import re
-        # This is a basic parser
         tokens = re.findall(r'[^\s{}]+', content)
         count = 0
         for token in tokens:
