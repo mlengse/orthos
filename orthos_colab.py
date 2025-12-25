@@ -4,6 +4,28 @@
 Original Javascript Port of Frank Liang's PatGen algorithm to Python/CUDA.
 Designed for Google Colab (T4/A100 GPU).
 
+# ==========================================
+# INSTALLATION (Copy to a Colab Cell)
+# ==========================================
+# !pip install cupy-cuda12x numba numpy
+# ==========================================
+
+OPTIMIZATION & ARCHITECTURE NOTES:
+----------------------------------
+1. **GPU Vectorization vs Loops**:
+   - The original JS/C code iterates word-by-word. This Python port processes the entire dictionary in parallel.
+   - `kernel_hyphenate`: Assigns one CUDA thread per word. Uses Trie traversal on GPU.
+   - `kernel_extract_candidates`: Parallelizes the candidate extraction phase.
+
+2. **Memory Coalescing**:
+   - All large arrays (`words`, `hvals`, `dots`) use Fortran order (`order='F'`).
+   - This ensures that adjacent threads (processing word `i` and `word `i+1`) access adjacent memory addresses,
+     maximizing memory bandwidth utilization on the GPU.
+
+3. **Data Transfer**:
+   - Uses `sync_dictionary_to_gpu` and `sync_trie_to_gpu` to only transfer data when dirty.
+   - Uses `cp.lexsort` on GPU for candidate aggregation, minimizing CPU-GPU roundtrips.
+
 Usage:
     python orthos_colab.py dictionary.txt patterns_in.txt patterns_out.txt
 """
@@ -776,12 +798,17 @@ class OrthosEngine:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # Parse TeX patterns
-        tokens = re.findall(r'[^\s{}]+', content)
+        # Parse patterns (handle both TeX format \patterns{...} and plain list)
+        # Remove TeX comments
+        content = re.sub(r'%.*', '', content)
+        # Remove \patterns { } wrappers if present
+        content = content.replace('\\patterns', '').replace('{', ' ').replace('}', ' ')
+
+        tokens = content.split()
+
         count = 0
         for token in tokens:
-            if '\\patterns' in token or token == '}': continue
-            if '%' in token: continue
+            if not token: continue
 
             # Parse 1ba -> val=1 at 0, b, a
             # logic from orthos_gpu
