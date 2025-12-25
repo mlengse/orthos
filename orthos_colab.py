@@ -199,23 +199,23 @@ if GPU_AVAILABLE:
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    out_idx = idx * MAX_LEN + dpos
+                    # out_idx = idx * MAX_LEN + dpos (REMOVED: Use coalesced indexing [idx, dpos, k])
 
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
-                            out_patterns[out_idx, k] = words[idx, spos + 1 + k]
+                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
 
                         weight = dotw[idx, dpos]
 
                         if is_good:
-                            out_weights[out_idx, 0] = weight
-                            out_weights[out_idx, 1] = 0.0
+                            out_weights[idx, dpos, 0] = weight
+                            out_weights[idx, dpos, 1] = 0.0
                         else:
-                            out_weights[out_idx, 0] = 0.0
-                            out_weights[out_idx, 1] = float(weight)
+                            out_weights[idx, dpos, 0] = 0.0
+                            out_weights[idx, dpos, 1] = float(weight)
 
-                        out_mask[out_idx] = 1
+                        out_mask[idx, dpos] = 1
 
 # ==========================================
 # CPU KERNELS (Numba Optimized)
@@ -307,23 +307,23 @@ def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    out_idx = idx * MAX_LEN + dpos
+                    # out_idx = idx * MAX_LEN + dpos (REMOVED)
 
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
-                            out_patterns[out_idx, k] = words[idx, spos + 1 + k]
+                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
 
                         weight = dotw[idx, dpos]
 
                         if is_good:
-                            out_weights[out_idx, 0] = weight
-                            out_weights[out_idx, 1] = 0.0
+                            out_weights[idx, dpos, 0] = weight
+                            out_weights[idx, dpos, 1] = 0.0
                         else:
-                            out_weights[out_idx, 0] = 0.0
-                            out_weights[out_idx, 1] = float(weight)
+                            out_weights[idx, dpos, 0] = 0.0
+                            out_weights[idx, dpos, 1] = float(weight)
 
-                        out_mask[out_idx] = 1
+                        out_mask[idx, dpos] = 1
 
 # ==========================================
 # ORTHOS ENGINE
@@ -867,9 +867,13 @@ class OrthosEngine:
         dot_max = pat_len - pat_dot
         if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
 
-        d_out_patterns = cp.zeros((n_words * MAX_LEN, pat_len), dtype=cp.uint32)
-        d_out_weights = cp.zeros((n_words * MAX_LEN, 2), dtype=cp.float32)
-        d_out_mask = cp.zeros((n_words * MAX_LEN), dtype=cp.uint8)
+        # BOLT OPTIMIZATION: Use Coalesced Memory Layout (order='F')
+        # Structure: (n_words, MAX_LEN, pat_len)
+        # This ensures threads accessing the same 'k' and 'dpos' but different 'idx' (word index)
+        # access adjacent memory locations, maximizing memory bandwidth.
+        d_out_patterns = cp.zeros((n_words, MAX_LEN, pat_len), dtype=cp.uint32, order='F')
+        d_out_weights = cp.zeros((n_words, MAX_LEN, 2), dtype=cp.float32, order='F')
+        d_out_mask = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
         # 3. Extract Candidates
         kernel_extract_candidates[blockspergrid, threadsperblock](
@@ -974,11 +978,10 @@ class OrthosEngine:
         if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
 
         # Pre-allocate output arrays
-        # Note: On CPU this might be large, but usually manageable for reasonable dictionary sizes.
-        # Max patterns = n_words * MAX_LEN.
-        out_patterns = np.zeros((n_words * MAX_LEN, pat_len), dtype=np.uint32)
-        out_weights = np.zeros((n_words * MAX_LEN, 2), dtype=np.float32)
-        out_mask = np.zeros((n_words * MAX_LEN), dtype=np.uint8)
+        # Updated to match GPU layout (order='F') for consistency
+        out_patterns = np.zeros((n_words, MAX_LEN, pat_len), dtype=np.uint32, order='F')
+        out_weights = np.zeros((n_words, MAX_LEN, 2), dtype=np.float32, order='F')
+        out_mask = np.zeros((n_words, MAX_LEN), dtype=np.uint8, order='F')
 
         # 3. Extract Candidates
         kernel_extract_candidates_cpu(
