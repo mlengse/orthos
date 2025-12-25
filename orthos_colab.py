@@ -380,6 +380,12 @@ class OrthosEngine:
         self.d_dots = None
         self.d_dotw = None
 
+        # GPU Workspace Buffers (Pre-allocated)
+        self.d_hvals = None
+        self.d_no_more = None
+        self.d_dots_working = None
+        self.d_out_mask = None
+
         self.gpu_available = False
         if GPU_AVAILABLE:
             try:
@@ -462,6 +468,17 @@ class OrthosEngine:
         self.d_word_lens = cp.asarray(self.word_lens)
         self.d_dots = cp.asarray(self.dots, order='F')
         self.d_dotw = cp.asarray(self.dotw, order='F')
+
+        # BOLT OPTIMIZATION: Pre-allocate workspace buffers
+        # Avoids repeating malloc/free in the inner generation loop
+        print("   [GPU] Allocating workspace buffers...")
+        n_words = self.words.shape[0]
+        self.d_hvals = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+        self.d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+        # d_dots_working must be same shape/type as d_dots
+        self.d_dots_working = cp.zeros_like(self.d_dots)
+        # d_out_mask is also constant size
+        self.d_out_mask = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
     def unpack(self, s):
         qmax = 1
@@ -696,6 +713,10 @@ class OrthosEngine:
 
         # Reset Cache
         self.d_words = None
+        self.d_hvals = None
+        self.d_no_more = None
+        self.d_dots_working = None
+        self.d_out_mask = None
 
         # Reset Trie (new chars might have been added)
         self.trie_c = np.zeros(TRIE_SIZE, dtype=np.int32)
@@ -821,11 +842,14 @@ class OrthosEngine:
         self.sync_dictionary_to_gpu()
 
         n_words = self.words.shape[0]
-        d_hvals = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
-        d_no_more = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
 
-        # We need a copy of dots because update_dots modifies it in-place for the kernel run
-        d_dots_working = cp.array(self.d_dots, copy=True)
+        # Reuse pre-allocated buffers
+        # Reset them to 0 or initial state
+        self.d_hvals.fill(0)
+        self.d_no_more.fill(0)
+
+        # Reset dots working copy efficiently
+        cp.copyto(self.d_dots_working, self.d_dots)
 
         threadsperblock = 128
         blockspergrid = (n_words + (threadsperblock - 1)) // threadsperblock
@@ -836,7 +860,7 @@ class OrthosEngine:
             self.d_trie_c, self.d_trie_l, self.d_trie_r,
             self.d_ops_val, self.d_ops_dot, self.d_ops_op,
             self.trie_root,
-            d_hvals, d_no_more,
+            self.d_hvals, self.d_no_more,
             pat_len, pat_dot, hyph_level, MAX_VAL
         )
 
@@ -849,7 +873,7 @@ class OrthosEngine:
         d_miss_count = cp.array([0], dtype=cp.uint32)
 
         kernel_update_dots[blockspergrid, threadsperblock](
-            d_dots_working, d_hvals, self.d_dotw, self.d_word_lens,
+            self.d_dots_working, self.d_hvals, self.d_dotw, self.d_word_lens,
             hyf_min, hyf_max,
             FOUND_HYF, ERR_HYF, IS_HYF,
             d_good_count, d_bad_count, d_miss_count
@@ -873,18 +897,20 @@ class OrthosEngine:
         # access adjacent memory locations, maximizing memory bandwidth.
         d_out_patterns = cp.zeros((n_words, MAX_LEN, pat_len), dtype=cp.uint32, order='F')
         d_out_weights = cp.zeros((n_words, MAX_LEN, 2), dtype=cp.float32, order='F')
-        d_out_mask = cp.zeros((n_words, MAX_LEN), dtype=cp.uint8, order='F')
+
+        # Reuse pre-allocated mask (reset to 0)
+        self.d_out_mask.fill(0)
 
         # 3. Extract Candidates
         kernel_extract_candidates[blockspergrid, threadsperblock](
-            self.d_words, self.d_word_lens, d_dots_working, self.d_dotw, d_no_more,
+            self.d_words, self.d_word_lens, self.d_dots_working, self.d_dotw, self.d_no_more,
             pat_len, pat_dot, good_dot, bad_dot,
             dot_min, dot_max,
-            d_out_patterns, d_out_weights, d_out_mask
+            d_out_patterns, d_out_weights, self.d_out_mask
         )
 
         # Aggregation
-        mask = d_out_mask.astype(bool)
+        mask = self.d_out_mask.astype(bool)
         valid_patterns = d_out_patterns[mask]
         valid_weights = d_out_weights[mask]
 
