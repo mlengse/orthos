@@ -313,7 +313,7 @@ const trie_taken = new Uint8Array(trie_size);
 const triec_c = new Uint32Array(triec_size);
 const triec_l = new Uint32Array(triec_size);
 const triec_r = new Uint32Array(triec_size);
-const triec_taken = new Uint8Array(trie_size);
+const triec_taken = new Uint8Array(triec_size);
 const ops = [];
 
 /**
@@ -1395,7 +1395,7 @@ function generateLevel() {
             }
         } while (pat_dot !== pat_len);
         k = max_dot;
-        while (k <= 1) {
+        while (k >= 1) {
             if (!more_this_level[k - 1]) {
                 more_this_level[k] = false;
             }

@@ -44,11 +44,10 @@ def install_dependencies():
     """Installs necessary packages if running in Colab or missing."""
     packages = ["cupy-cuda12x", "numba", "numpy"]
 
-    # Check if we are in Colab
     in_colab = "google.colab" in sys.modules
 
     if in_colab:
-        print("⚡ Google Colab detected. checking dependencies...")
+        print("⚡ Google Colab detected. Checking dependencies...")
         try:
             import cupy
             import numba
@@ -59,7 +58,6 @@ def install_dependencies():
             subprocess.check_call([sys.executable, "-m", "pip", "install"] + packages)
             print("   Installation complete.")
     else:
-        # Local environment check
         try:
             import cupy
             import numba
@@ -1278,7 +1276,7 @@ def input_int_pair(prompt, vmin, vmax):
             else:
                 continue
 
-            if n1 >= vmin and n2 <= vmax:
+            if n1 >= vmin and n1 <= n2 and n2 <= vmax:
                 return n1, n2
             else:
                 print(f"Values must be between {vmin} and {vmax}")

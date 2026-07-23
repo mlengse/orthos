@@ -1,0 +1,12 @@
+{
+  "name": "orthos",
+  "version": "1.0.0",
+  "description": "Pattern generator for hyphenation patterns",
+  "main": "orthos.js",
+  "scripts": {
+    "start": "node orthos.js"
+  },
+  "engines": {
+    "node": ">=5.1.0"
+  }
+}

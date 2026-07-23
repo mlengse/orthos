@@ -1,1 +1,6 @@
-__pycache__
+__pycache__/
+*.pyc
+.idea/
+node_modules/
+*.cpuprofile
+pattmp.*
