@@ -14,54 +14,30 @@ Example:
 
 ---
 
-## Python Implementations
+## Python Implementation (GPU/CPU)
 
-Selain versi JavaScript, tersedia juga implementasi Python untuk pattern generation:
-
-### orthos_gpu.py (GPU-Accelerated)
-
-Implementasi menggunakan CUDA/CuPy untuk akselerasi GPU. Cocok untuk Google Colab atau system dengan NVIDIA GPU.
+Single-file Python port in `orthos_colab.py` with GPU acceleration (CUDA/CuPy) and CPU fallback (NumPy/Numba).
 
 **Dependensi:**
 ```bash
-pip install numpy numba cupy-cuda12x
+pip install numpy numba           # CPU only
+pip install numpy numba cupy-cuda12x  # GPU acceleration
 ```
 
-**Penggunaan:**
-```python
-from orthos_gpu import OrthosGPU
-
-orthos = OrthosGPU()
-orthos.load_dictionary_safe("wordlist.dic")
-orthos.generate_level(
-    pat_start=2, pat_finish=5,
-    hyph_level=1,
-    good_wt=1, bad_wt=1, thresh=1,
-    left_hyphen_min=2, right_hyphen_min=2
-)
-```
-
-### orthos_cpu.py (CPU-Only)
-
-Implementasi murni NumPy tanpa dependensi GPU. Cocok untuk environment tanpa GPU.
-
-**Dependensi:**
+**CLI Usage:**
 ```bash
-pip install numpy
+python orthos_colab.py <dictionary> <pattern-in> <pattern-out>
+python orthos_colab.py --validate  # run self-test
 ```
 
-**Penggunaan:**
+**Programmatic Usage:**
 ```python
-from orthos_cpu import OrthosCPU
+from orthos_colab import OrthosEngine
 
-orthos = OrthosCPU()
-orthos.load_dictionary_safe("wordlist.dic")
-orthos.generate_level(
-    pat_start=2, pat_finish=5,
-    hyph_level=1,
-    good_wt=1, bad_wt=1, thresh=1,
-    left_hyphen_min=2, right_hyphen_min=2
-)
+engine = OrthosEngine()
+engine.load_dictionary("wordlist.dic")
+engine.load_patterns("pattern.0")
+engine.generate_level(...)
 ```
 
 ### Format Dictionary
@@ -99,10 +75,10 @@ So why a port of patgen to node.js? (and why JavaScript and not just C?)
 When patgen was originally written computers were very limited: the PDP-10
 mainframe computer used by Liang had 256 Kilowords – about 1MB – of memory
 and could average about 450 kilo instructions per second.
-Saving memory was critical, characters were encoded in ASCII, students where
-teached in structured programming using PASCAL.
+Saving memory was critical, characters were encoded in ASCII, students were
+taught structured programming using PASCAL.
 
-A lot has changed eversince – and many things haven't. Porting patgen to
+A lot has changed ever since – and many things haven't. Porting patgen to
 JavaScript/ES6/node.js is aimed at:
 - learning how patgen works
 - providing software that runs acceptably fast on current computers

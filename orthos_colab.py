@@ -103,7 +103,7 @@ MAX_VAL = 10
 MAX_DOT = 15
 MAX_LEN = 50
 TRIE_SIZE = 55000 * 500
-MAX_OPS = 510 * 100
+MAX_OPS = 510 * 100  # 10x larger than JS (5100) to handle GPU batch aggregation
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit
 
 # Character Classes
@@ -200,9 +200,7 @@ if GPU_AVAILABLE:
             no_more[idx, i] = l_no_more[i]
 
     @cuda.jit
-    def kernel_update_dots(dots, hvals, dotw, word_lens, hyf_min, hyf_max,
-                           found_hyf, err_hyf, is_hyf,
-                           good_count, bad_count, miss_count):
+    def kernel_update_dots(dots, hvals, word_lens, hyf_min, hyf_max):
         """
         Equivalent to change_dots() in orthos.js.
         Updates the 'dots' array based on calculated 'hvals'.
@@ -215,7 +213,6 @@ if GPU_AVAILABLE:
         dpos = wlen - hyf_max
 
         while dpos >= hyf_min:
-            # If hval is odd, it means we found a hyphen here
             if (hvals[idx, dpos] % 2) == 1:
                 dots[idx, dpos] += 1
             dpos -= 1
@@ -886,6 +883,7 @@ class OrthosEngine:
         for h in range(1, MAX_OPS + 1):
             if self.ops_val[h] == MAX_VAL:
                 self.ops_val[h] = 0
+                self.op_count -= 1
         self.qmax_thresh = 7
 
     def do_dictionary_gpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
@@ -923,15 +921,9 @@ class OrthosEngine:
         hyf_max = right_hyphen_min + 1
 
         # 2. Update Dots
-        d_good_count = cp.array([0], dtype=cp.uint32)
-        d_bad_count = cp.array([0], dtype=cp.uint32)
-        d_miss_count = cp.array([0], dtype=cp.uint32)
-
         kernel_update_dots[blockspergrid, threadsperblock](
-            self.d_dots_working, self.d_hvals, self.d_dotw, self.d_word_lens,
-            hyf_min, hyf_max,
-            FOUND_HYF, ERR_HYF, IS_HYF,
-            d_good_count, d_bad_count, d_miss_count
+            self.d_dots_working, self.d_hvals, self.d_word_lens,
+            hyf_min, hyf_max
         )
 
         if (hyph_level % 2) == 1:

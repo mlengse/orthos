@@ -92,7 +92,7 @@
 
 /**
  * Read the files given as arguments and create a `File`-Object
- * `File` is a proxy that holds the content of the readed
+ * `File` is a proxy that holds the content of the read
  * file in memory – here we trade memory for I/O
  * (typically the dictionary files are < 10MB)
  * Todo: Error handling
@@ -837,9 +837,11 @@ function read_buf(file) {
     do {
         buf.push(file.data[1][file.data[0]]);
         file.data[0] += 1;
-    } while (file.data[1][file.data[0]] !== "\n");
+    } while (!file.eof() && file.data[1][file.data[0]] !== "\n");
     buf_len = buf.length;
-    file.data[0] += 1;
+    if (!file.eof()) {
+        file.data[0] += 1;
+    }
 }
 
 
