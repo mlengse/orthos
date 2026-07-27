@@ -1337,6 +1337,9 @@ function read_patterns() {
                 break;
             case letter_class:
                 pat_len += 1;
+                if (pat_len >= 50) {
+                    bad_input("Pattern exceeds maximum length");
+                }
                 hval[pat_len] = 0;
                 pat[pat_len] = xint[cc];
                 break;

@@ -4,7 +4,8 @@
   "description": "Pattern generator for hyphenation patterns",
   "main": "orthos.js",
   "scripts": {
-    "start": "node orthos.js"
+    "start": "node orthos.js",
+    "test": "node tests/test_orthos.js"
   },
   "engines": {
     "node": ">=5.1.0"

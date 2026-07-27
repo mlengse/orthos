@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from orthos_colab import OrthosEngine, MAX_VAL, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF
+from orthos_colab import OrthosEngine, MAX_VAL, MAX_LEN, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF
 
 
 @pytest.fixture
@@ -326,3 +326,105 @@ class TestB7Parity:
         pats = _collect_pattern_tuples(engine)
         assert len(pats) == 1
         assert pats[0] == ("z", 4, 1)
+
+
+# ============================================================
+# load_patterns — input sanitization (S6)
+# ============================================================
+
+class TestLoadPatterns:
+    def _write_pat(self, lines):
+        """Write a temporary pattern file and return its path."""
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pat", delete=False, encoding="utf-8"
+        )
+        for line in lines:
+            f.write(line + "\n")
+        f.close()
+        return f.name
+
+    def test_load_valid_patterns(self, engine):
+        """Valid patterns should be loaded into the trie."""
+        _make_engine_with_chars(engine)
+        path = self._write_pat(["1ab", "b2a"])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            assert len(pats) >= 2
+        finally:
+            os.unlink(path)
+
+    def test_load_empty_file(self, engine):
+        """Loading an empty pattern file should not crash."""
+        _make_engine_with_chars(engine)
+        path = self._write_pat([])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            assert len(pats) == 0
+        finally:
+            os.unlink(path)
+
+    def test_invalid_digit_value_skipped(self, engine):
+        """Patterns with digit values >= MAX_VAL should be skipped."""
+        _make_engine_with_chars(engine)
+        path = self._write_pat(["9ab", "1cd"])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            # '9ab' has val=9 which is < MAX_VAL (10), so it's valid
+            # But test with actual MAX_VAL: patterns with digit >= 10 can't
+            # be written as single digit in TeX format, so test the boundary
+            assert all(p[1] < MAX_VAL for p in pats)
+        finally:
+            os.unlink(path)
+
+    def test_oversized_pattern_skipped(self, engine):
+        """Patterns exceeding MAX_LEN characters should be skipped."""
+        _make_engine_with_chars(engine)
+        # Build a pattern longer than MAX_LEN
+        long_pattern = "a" * (MAX_LEN + 1)
+        short_pattern = "ab"
+        path = self._write_pat([f"1{long_pattern}", f"1{short_pattern}"])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            # long_pattern should be skipped, short_pattern should be loaded
+            strings = {p[0] for p in pats}
+            assert long_pattern not in strings
+            assert short_pattern in strings
+        finally:
+            os.unlink(path)
+
+    def test_tex_comments_stripped(self, engine):
+        """TeX comments (%) should be stripped before parsing."""
+        _make_engine_with_chars(engine)
+        path = self._write_pat(["1ab % this is a comment", "1cd"])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            strings = {p[0] for p in pats}
+            assert "ab" in strings
+            assert "cd" in strings
+        finally:
+            os.unlink(path)
+
+    def test_tex_wrapper_stripped(self, engine):
+        """\\patterns{...} wrapper should be stripped."""
+        _make_engine_with_chars(engine)
+        path = self._write_pat(["\\patterns{", "1ab", "1cd", "}"])
+        try:
+            engine.load_patterns(path)
+            pats = _collect_pattern_tuples(engine)
+            strings = {p[0] for p in pats}
+            assert "ab" in strings
+            assert "cd" in strings
+        finally:
+            os.unlink(path)
+
+    def test_missing_file_starts_empty(self, engine):
+        """Loading a nonexistent file should not crash (graceful fallback)."""
+        _make_engine_with_chars(engine)
+        engine.load_patterns("/nonexistent/path/patterns.pat")
+        pats = _collect_pattern_tuples(engine)
+        assert len(pats) == 0

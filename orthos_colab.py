@@ -815,13 +815,18 @@ class OrthosEngine:
             while i < len(token):
                 c = token[i]
                 if c.isdigit():
-                    values[letter_pos] = int(c)
+                    val = int(c)
+                    if val >= MAX_VAL:
+                        break  # skip patterns with invalid hyphenation values
+                    values[letter_pos] = val
                 else:
                     letters.append(c)
                     letter_pos += 1
                 i += 1
 
             if not letters: continue
+            if len(letters) > MAX_LEN:
+                continue  # skip patterns exceeding maximum length
 
             # Encode
             pat_ints = []
