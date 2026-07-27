@@ -102,7 +102,7 @@ except ImportError:
 MAX_VAL = 10
 MAX_DOT = 15
 MAX_LEN = 50
-TRIE_SIZE = 55000 * 500
+TRIE_SIZE = 55000 * 80  # Reduced from 55000*500 (~341 MB) to match JS ratio (~86 MB)
 MAX_OPS = 510 * 100  # 10x larger than JS (5100) to handle GPU batch aggregation
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit
 
@@ -537,11 +537,23 @@ class OrthosEngine:
         self.trie_taken[s] = 0
         self.qmax = qmax - 1
 
+    def _grow_trie(self):
+        """Double trie array sizes when capacity is exceeded."""
+        new_size = self.trie_size * 2
+        self.trie_c = np.concatenate([self.trie_c, np.zeros(new_size - self.trie_size, dtype=np.int32)])
+        self.trie_l = np.concatenate([self.trie_l, np.zeros(new_size - self.trie_size, dtype=np.int32)])
+        self.trie_r = np.concatenate([self.trie_r, np.zeros(new_size - self.trie_size, dtype=np.int32)])
+        self.trie_taken = np.concatenate([self.trie_taken, np.zeros(new_size - self.trie_size, dtype=np.uint8)])
+        self.trie_size = new_size
+        print(f"   Trie grew to {new_size} entries ({new_size * 13 / 1024 / 1024:.1f} MB)")
+
     def first_fit(self):
         t = self.trie_r[self.trie_max + 1] if self.qmax > self.qmax_thresh else 0
         while True:
             t = int(self.trie_l[t])
             s = int(t) - int(self.trieq_c[1])
+            if s < 0 or s > self.trie_size - len(self.xext):
+                self._grow_trie()
             if s < 0 or s > self.trie_size - len(self.xext):
                 raise RuntimeError("Trie Overflow")
 

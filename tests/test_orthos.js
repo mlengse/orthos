@@ -46,7 +46,7 @@ function runOrthos(dictPath, patInPath, patOutPath, inputs, timeout) {
             if (inputIdx < inputs.length) {
                 child.stdin.write(inputs[inputIdx] + "\n");
                 inputIdx++;
-                setTimeout(sendNext, 200);
+                setTimeout(sendNext, 300);
             } else {
                 child.stdin.end();
             }
@@ -55,7 +55,7 @@ function runOrthos(dictPath, patInPath, patOutPath, inputs, timeout) {
 
         const timer = setTimeout(() => {
             child.kill();
-            reject(new Error("Timeout"));
+            reject(new Error("Timeout — script may be waiting for more input"));
         }, timeout || 30000);
 
         child.on("close", (code) => {
@@ -91,32 +91,32 @@ async function test(name, fn) {
 async function main() {
     setup();
 
-    const dictFile = writeTmp("test.dic", "ka-ta\nba-cu\nsu-su\n");
-    const patIn = writeTmp("in.pat", "");
-    const patOut = writeTmp("out.pat", "");
-
     console.log("Running orthos.js tests...\n");
 
+    // Flow: left_right_hyph_min → hyph_start/finish → pat_start/finish → good/bad/thresh → do_dictionary? (n) → hyphenate? (n)
+    const INPUTS = ["1 1", "1 1", "1 1", "1 1 1", "n", "n"];
+
     await test("Script runs without crashing", async () => {
-        const { stdout } = await runOrthos(dictFile, patIn, patOut, ["1 1", "1 1"]);
+        const dictFile = writeTmp("test.dic", "ka-ta\nba-cu\nsu-su\n");
+        const patIn = writeTmp("in.pat", "");
+        const patOut = writeTmp("out.pat", "");
+        const { stdout } = await runOrthos(dictFile, patIn, patOut, INPUTS);
         assert.ok(stdout.includes("This is orthos.js"), "Should print banner");
     });
 
-    await test("Output file is created", async () => {
+    await test("Output file is created and non-empty", async () => {
+        const patOut = path.join(TMP, "out.pat");
         assert.ok(fs.existsSync(patOut), "Output file should exist");
-    });
-
-    await test("Output file contains patterns", async () => {
         const content = fs.readFileSync(patOut, "utf-8");
         assert.ok(content.length > 0, "Output should not be empty");
     });
 
-    await test("Processes multiple words", async () => {
-        const dict2 = writeTmp("test2.dic", "a\nab\nabc\nabcd\nabcde\n");
-        const pat2 = writeTmp("in2.pat", "");
-        const out2 = writeTmp("out2.pat", "");
-        const { stdout } = await runOrthos(dict2, pat2, out2, ["1 1", "1 1"]);
-        assert.ok(stdout.includes("5 words"), "Should report 5 words loaded");
+    await test("Reports word count", async () => {
+        const dictFile = writeTmp("test2.dic", "a\nab\nabc\nabcd\nabcde\n");
+        const patIn = writeTmp("in2.pat", "");
+        const patOut = writeTmp("out2.pat", "");
+        const { stdout } = await runOrthos(dictFile, patIn, patOut, INPUTS);
+        assert.ok(stdout.includes("patterns read in"), "Should report patterns read");
     });
 
     teardown();

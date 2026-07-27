@@ -98,10 +98,10 @@
  * Todo: Error handling
  */
 
-var fs = require("fs");
+const fs = require("fs");
 
 function makeFile(content) {
-    var data = [0, content];
+    const data = [0, content];
 
     function eof() {
         return data[0] === data[1].length;
@@ -112,7 +112,7 @@ function makeFile(content) {
     }
 
     function read() {
-        var r = data[1].charAt(data[0]);
+        const r = data[1].charAt(data[0]);
         data[0] += 1;
         return r;
     }
@@ -169,8 +169,8 @@ const patout = makeFile("");
 /**
  * variables for fullfilled file promises
  */
-var dictionary;
-var patterns;
+let dictionary;
+let patterns;
 
 
 /**
@@ -191,7 +191,7 @@ const banner = "This is orthos.js for node.js, Version 1.0b";
  * space for pattern trie
  * originally this was 55000, but that's to small for the german dictionary
  */
-const trie_size = 55000 * 80;
+const trie_size = 55000 * 40;  // Reduced from 55000*80 (43 MB → 22 MB)
 
 /**
  * space for pattern count trie, must be less than trie_size and greater
@@ -226,19 +226,19 @@ const max_len = 50;
  * originaly this was const set to 80, but it's faster
  * to dynamically assign the buf-array and push new values.
  */
-var buf_len;
+let buf_len;
 
 /**
  * The following vars are the parameters for orthos.js
  * They are prompted to the user for each run.
  */
-var pat_start;
-var pat_finish;
-var hyph_start;
-var hyph_finish;
-var good_wt;
-var bad_wt;
-var thresh;
+let pat_start;
+let pat_finish;
+let hyph_start;
+let hyph_finish;
+let good_wt;
+let bad_wt;
+let thresh;
 
 /**
  * For the purpose of this program (see trie creation) each character
@@ -250,7 +250,7 @@ var thresh;
  * at the beginning of a word that begins with 'ab' while a pattern like 'ab1'
  * matches at every position in a word.
  */
-var edge_of_word;
+let edge_of_word;
 
 /**
  * When reading the dictionary and patterns the characters have to be
@@ -282,10 +282,10 @@ const err_hyf = 11;// '#'
 const is_hyf = 12;// '-'
 const found_hyf = 13;// '*'
 
-var xclass = {};
-var xint = {};
-var xdig = [];
-var xext = [];
+const xclass = {};
+const xint = {};
+let xdig = [];
+const xext = [];
 
 /**
  * cmin...cmax is the range of internalCharCodes (cmax = xext.length - 1)
@@ -293,8 +293,8 @@ var xext = [];
  * cnum is the number of internalCharCodes (cnum = xext.length)
  */
 const cmin = 1;
-var cmax;
-var cnum;
+let cmax;
+let cnum;
 
 /**
  * The trie is stored in separate typed arrays:
@@ -327,54 +327,54 @@ const ops = [];
 const trieq_c = new Uint32Array(50);
 const trieq_l = new Uint32Array(50);
 const trieq_r = new Uint32Array(50);
-var qmax;
-var qmax_thresh;
+let qmax;
+let qmax_thresh;
 
-var trie_max;//maximum occupied trie node
-var trie_bmax;//maximum base of trie family
-var trie_count;//number of occupied trie nodes, for space usage statistics
-var op_count;//number of outpust in hash table
+let trie_max;//maximum occupied trie node
+let trie_bmax;//maximum base of trie family
+let trie_count;//number of occupied trie nodes, for space usage statistics
+let op_count;//number of outpust in hash table
 
 
 /**
  * The trie_root is on position 1. A link to 0 marks the end of a pattern
  */
-var trie_root = 1;
-var triec_root = 1;
+const trie_root = 1;
+const triec_root = 1;
 
 /**
  * pat is the current pattern of length pat_len
  */
-var pat = new Uint32Array(50);
-var pat_len;
+const pat = new Uint32Array(50);
+let pat_len;
 
-var triec_max;//maximum occupied trie node
-var triec_bmax;//maximum base of trie family
-var triec_count;//number of occupied trie nodes, for space usage statistics
-var triec_kmax;//shows growth of trie during pass
-var pat_count;//number of patterns in count trie
+let triec_max;//maximum occupied trie node
+let triec_bmax;//maximum base of trie family
+let triec_count;//number of occupied trie nodes, for space usage statistics
+let triec_kmax;//shows growth of trie during pass
+let pat_count;//number of patterns in count trie
 
-var word = new Uint8Array(max_len);//current word
-var dots = new Uint8Array(max_len);//current hyphens
-var dotw = new Uint8Array(max_len);//dot weights
-var hval = new Uint8Array(max_len);//hyphenation values
-var no_more = new Uint8Array(max_len);//positions 'knocked out'
-var wlen;//length of current word
-var word_wt;//the global word weight
-var wt_chg;//indicates word_wt has changed
+const word = new Uint8Array(max_len);//current word
+const dots = new Uint8Array(max_len);//current hyphens
+const dotw = new Uint8Array(max_len);//dot weights
+const hval = new Uint8Array(max_len);//hyphenation values
+const no_more = new Uint8Array(max_len);//positions 'knocked out'
+let wlen;//length of current word
+let word_wt;//the global word weight
+let wt_chg;//indicates word_wt has changed
 
 //block 55
-var left_hyphen_min;//minimal length of string before first hyphenatiom
-var right_hyphen_min;//minimal length of string after last hyphenatiom
+let left_hyphen_min;//minimal length of string before first hyphenatiom
+let right_hyphen_min;//minimal length of string after last hyphenatiom
 
 //block 66
-var good_pat_count;//number of good patterns added at end of pass
-var bad_pat_count;//number of bad patterns added at end of pass
-var good_count;//good hyphen count
-var bad_count;//bad hyphen count
-var miss_count;//missed hyphen coung
-var level_pattern_count;//number of good patterns at level
-var more_to_come;//set to true if the quality of a pattern is ambiguous
+let good_pat_count;//number of good patterns added at end of pass
+let bad_pat_count;//number of bad patterns added at end of pass
+let good_count;//good hyphen count
+let bad_count;//bad hyphen count
+let miss_count;//missed hyphen coung
+let level_pattern_count;//number of good patterns at level
+let more_to_come;//set to true if the quality of a pattern is ambiguous
 
 /**
  * If hyphp is set to true, do_dictionary will write out a copy of the
@@ -382,24 +382,24 @@ var more_to_come;//set to true if the quality of a pattern is ambiguous
  * set to true, do_dictionary will collect pattern statistics for patterns
  * with length pat_len and hyphen position pat_dot, at level hyph_level.
  */
-var procesp;
-var hyphp;
-var pat_dot;
-var hyph_level;
-var filnam = "";
+let procesp;
+let hyphp;
+let pat_dot;
+let hyph_level;
+let filnam = "";
 
-var hyf_min;//left_hyphen_min + 1
-var hyf_max;//right_hyphen_min + 1
-var hyf_len;//hyf_min + hyf_max
+let hyf_min;//left_hyphen_min + 1
+let hyf_max;//right_hyphen_min + 1
+let hyf_len;//hyf_min + hyf_max
 
-var good_dot;//is_hyf in odd (collecting) passes, err_hyf in even passes
-var bad_dot;//no_hyf in odd (collecting) passes, found_hyf in even passes
-var dot_min;//analoguos to hyf_min
-var dot_max;//analoguos to hyf_max
-var dot_len;//analoguos to hyf_len
+let good_dot;//is_hyf in odd (collecting) passes, err_hyf in even passes
+let bad_dot;//no_hyf in odd (collecting) passes, found_hyf in even passes
+let dot_min;//analoguos to hyf_min
+let dot_max;//analoguos to hyf_max
+let dot_len;//analoguos to hyf_len
 
 //block 91
-var max_pat;//largest hyphenation value found in any pattern
+let max_pat;//largest hyphenation value found in any pattern
 
 /**
  * Some helper functions
@@ -433,7 +433,7 @@ function overflow(msg1) {
 function initialize() {
     //setup internal representation for digits
     String("0123456789").split("").forEach(function (c, i) {
-        var cc = c.charCodeAt(0);
+        const cc = c.charCodeAt(0);
         xext[i] = String.fromCharCode(cc);
         xint[cc] = i;
         xclass[cc] = digit_class;
@@ -464,11 +464,11 @@ function initialize() {
 
 //block 35
 function first_fit() {
-    var s;
-    var t;
-    var q;
-    var doSearchLoop = true;
-    var continueLoop = false;
+    let s;
+    let t;
+    let q;
+    let doSearchLoop = true;
+    let continueLoop = false;
     //block 36
     t = (qmax > qmax_thresh)
         ? trie_r[trie_max + 1]
@@ -523,8 +523,8 @@ function first_fit() {
 
 //block 38
 function unpack(s) {
-    var c;
-    var t;
+    let c;
+    let t;
     qmax = 1;
     c = cmin;
     while (c <= cmax) {
@@ -546,8 +546,8 @@ function unpack(s) {
 }
 //block 34
 function init_pattern_trie() {
-    var c = 0; //internal_code
-    var h = 1; //opt_type
+    let c = 0; //internal_code
+    let h = 1; //opt_type
     while (c <= cmax) {
         trie_c[trie_root + c] = c;
         trie_l[trie_root + c] = 0;
@@ -571,7 +571,7 @@ function init_pattern_trie() {
 
 //block 39
 function new_trie_op(v, d, n) {
-    var h;
+    let h;
     h = ((n + 313 * d + 361 * v) % max_ops) + 1;
     while (true) {
         if (ops[h].val === 0) {
@@ -598,9 +598,9 @@ function new_trie_op(v, d, n) {
 
 //block 41
 function insert_pattern(val, dot) {
-    var i;
-    var s;
-    var t;
+    let i;
+    let s;
+    let t;
     i = 1;
     s = trie_root + pat[i];
     t = trie_l[s];
@@ -650,7 +650,7 @@ function insert_pattern(val, dot) {
 
 
 function init_count_trie() {
-    var c = 0;
+    let c = 0;
     while (c <= cmax) {
         triec_c[triec_root + c] = c;
         triec_l[triec_root + c] = 0;
@@ -670,11 +670,11 @@ function init_count_trie() {
 
 //block 45
 function firstc_fit() {
-    var a;
-    var b;
-    var q;
-    var doSearchLoop = true;
-    var continueLoop = false;
+    let a;
+    let b;
+    let q;
+    let doSearchLoop = true;
+    let continueLoop = false;
     //begin block 46
     if (qmax > 3) {
         a = triec_r[triec_max + 1];
@@ -738,8 +738,8 @@ function firstc_fit() {
 
 //block 48
 function unpackc(b) {
-    var c = cmin;
-    var a;
+    let c = cmin;
+    let a;
     qmax = 1;
     while (c <= cmax) {
         a = b + c;
@@ -763,9 +763,9 @@ function unpackc(b) {
 
 //block 49
 function insertc_pat(fpos) {
-    var spos;
-    var a;
-    var b;
+    let spos;
+    let a;
+    let b;
     spos = fpos - pat_len;
     spos += 1;
     b = triec_root + word[spos];
@@ -815,11 +815,11 @@ function insertc_pat(fpos) {
 }
 
 //block 51
-var pattmp = makeFile("");
+const pattmp = makeFile("");
 
 //block 52
-var buf = [];
-var buf_ptr;
+let buf = [];
+let buf_ptr;
 
 //block 53
 function print_buf() {
@@ -849,10 +849,10 @@ function read_buf(file) {
 
 //block 61
 function find_letters(b, i) {
-    var c = cmin;
-    var a;
-    var j;
-    var l;
+    let c = cmin;
+    let a;
+    let j;
+    let l;
     if (i === 0) {
         init_count_trie();
     }
@@ -888,8 +888,8 @@ function find_letters(b, i) {
 
 //block 64
 function traverse_count_trie(b, i) {
-    var c = cmin;
-    var a;
+    let c = cmin;
+    let a;
     while (c <= cmax) {
         a = b + c;
         if (triec_c[a] === c) {
@@ -945,11 +945,11 @@ function collect_count_trie() {
 
 //block 68
 function delete_patterns(s) {
-    var c = cmin;
-    var t;
-    var all_freed;
-    var h;
-    var n;
+    let c = cmin;
+    let t;
+    let all_freed;
+    let h;
+    let n;
     all_freed = true;
     while (c <= cmax) {
         t = s + c;
@@ -995,9 +995,9 @@ function delete_patterns(s) {
 
 //block 71
 function delete_bad_patterns() {
-    var old_op_count;
-    var old_trie_count;
-    var h = 1;
+    let old_op_count;
+    let old_trie_count;
+    let h = 1;
     old_op_count = op_count;
     old_trie_count = trie_count;
     delete_patterns(trie_root);
@@ -1015,10 +1015,10 @@ function delete_bad_patterns() {
 //block 72
 function output_patterns(s, pat_len, indent) {
     indent = indent || 0;
-    var c = cmin;
-    var t;
-    var h;
-    var d;
+    let c = cmin;
+    let t;
+    let h;
+    let d;
     while (c <= cmax) {
         t = s + c;
         if (trie_c[t] === c) {
@@ -1063,7 +1063,7 @@ function output_patterns(s, pat_len, indent) {
 
 //block 76
 function read_word() {
-    var cc = dictionary.data[1].charCodeAt(dictionary.data[0]);
+    let cc = dictionary.data[1].charCodeAt(dictionary.data[0]);
     word[1] = edge_of_word;
     wlen = 1;
     while (cc !== 10) {
@@ -1100,12 +1100,12 @@ function read_word() {
 
 //block 77
 function hyphenate() {
-    var spos = wlen - hyf_max;
-    var dpos = 0;
-    var fpos = 0;
-    var t;
-    var h;
-    var v;
+    let spos = wlen - hyf_max;
+    let dpos = 0;
+    let fpos = 0;
+    let t;
+    let h;
+    let v;
 
     while (spos >= 0) {
         no_more[spos] = 0;
@@ -1140,7 +1140,7 @@ function hyphenate() {
 
 //block 81
 function change_dots() {
-    var dpos = wlen - hyf_max;
+    let dpos = wlen - hyf_max;
     while (dpos >= hyf_min) {
         if ((hval[dpos] % 2) === 1) {
             dots[dpos] += 1;
@@ -1163,7 +1163,7 @@ function change_dots() {
 
 //bloch 82
 function output_hyphenated_word() {
-    var dpos = 2;
+    let dpos = 2;
     if (wt_chg) {
         pattmp.write(xdig[word_wt]);
         wt_chg = false;
@@ -1192,10 +1192,10 @@ At this point of the program range check violations may occur if these counts ar
 it would, however, be too expensive to prevent this.
 */
 function do_word() {
-    var spos;
-    var dpos = wlen - dot_max;
-    var fpos;
-    var a;
+    let spos;
+    let dpos = wlen - dot_max;
+    let fpos;
+    let a;
     while (dpos >= dot_min) {
         spos = dpos - pat_dot;
         fpos = spos + pat_len;
@@ -1309,9 +1309,9 @@ function do_dictionary() {
 
 //block 90
 function read_patterns() {
-    var cc;
-    var d;
-    var i;
+    let cc;
+    let d;
+    let i;
     level_pattern_count = 0;
     max_pat = 0;
     patterns.reset();
@@ -1376,10 +1376,10 @@ function read_patterns() {
 //block 94
 function generateLevel() {
     //block 95
-    var j;
-    var k = 0;
-    var dot1;
-    var more_this_level = [];
+    let j;
+    let k = 0;
+    let dot1;
+    const more_this_level = [];
     //generate a level 96
     while (k <= max_dot) {
         more_this_level[k] = true;
@@ -1414,13 +1414,13 @@ function generateLevel() {
 }
 
 function askDoDictionary() {
-    var readline = require("readline");
-    var rl = readline.createInterface(process.stdin, process.stdout);
+    const readline = require("readline");
+    const rl = readline.createInterface(process.stdin, process.stdout);
     rl.setPrompt("hyphenate word list? ");
     rl.prompt();
 
     rl.on("line", function (line) {
-        var chunk = line.trim();
+        const chunk = line.trim();
         if (chunk === "y" || chunk === "Y") {
             rl.close();
             do_dictionary();
@@ -1461,16 +1461,16 @@ function doLevels(currLevel) {
 
 //var profiler = require("v8-profiler");
 function getGBT(currLevel) {
-    var readline = require("readline");
-    var rl = readline.createInterface(process.stdin, process.stdout);
-    var n1;
-    var n2;
-    var n3;
+    const readline = require("readline");
+    const rl = readline.createInterface(process.stdin, process.stdout);
+    let n1;
+    let n2;
+    let n3;
     rl.setPrompt("good weight, bad weight, threshold: ");
     rl.prompt();
 
     rl.on("line", function (line) {
-        var chunks = line.trim().split(" ");
+        const chunks = line.trim().split(" ");
         if (chunks.length >= 3) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
@@ -1509,15 +1509,15 @@ function getGBT(currLevel) {
 }
 
 function getPat(currLevel) {
-    var readline = require("readline");
-    var rl = readline.createInterface(process.stdin, process.stdout);
-    var n1;
-    var n2;
+    const readline = require("readline");
+    const rl = readline.createInterface(process.stdin, process.stdout);
+    let n1;
+    let n2;
     rl.setPrompt("pat_start, pat_finish: ");
     rl.prompt();
 
     rl.on("line", function (line) {
-        var chunks = line.trim().split(" ");
+        const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
@@ -1547,15 +1547,15 @@ function getPat(currLevel) {
 
 
 function getHyph() {
-    var readline = require("readline");
-    var rl = readline.createInterface(process.stdin, process.stdout);
-    var n1;
-    var n2;
+    const readline = require("readline");
+    const rl = readline.createInterface(process.stdin, process.stdout);
+    let n1;
+    let n2;
     rl.setPrompt("hyph_start, hyph_finish: ");
     rl.prompt();
 
     rl.on("line", function (line) {
-        var chunks = line.trim().split(" ");
+        const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
@@ -1586,9 +1586,9 @@ function getHyph() {
  * Collect characters used in dictionary and extend xext, xint and xclass
  */
 function collectAndSetChars() {
-    var charsS = new Set();
-    var charsA;
-    var cc;
+    const charsS = new Set();
+    let charsA;
+    let cc;
     dictionary.reset();
     println("collecting chars…");
     while (!dictionary.eof()) {
@@ -1601,8 +1601,8 @@ function collectAndSetChars() {
     charsA = Array.from(charsS);
     charsA.sort((a, b) => a - b);
     charsA.forEach(function setChar(cc) {
-        var c = String.fromCharCode(cc);
-        var i = xint[cc];
+        const c = String.fromCharCode(cc);
+        let i = xint[cc];
         if (i === undefined) {
             if (c === c.toUpperCase()) {
                 //c is upperCase -> try lowerCase
@@ -1637,16 +1637,16 @@ function main() {
 }
 
 function getLeftRightHyphenMin() {
-    var readline = require("readline");
-    var rl = readline.createInterface(process.stdin, process.stdout);
-    var n1;
-    var n2;
+    const readline = require("readline");
+    const rl = readline.createInterface(process.stdin, process.stdout);
+    let n1;
+    let n2;
     rl.setPrompt("left_hyphen_min, right_hyphen_min: ");
     rl.prompt();
 
     rl.on("line", function (line) {
         line = line.trim();
-        var chunks = line.trim().split(" ");
+        const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
