@@ -99,6 +99,8 @@
  */
 
 const fs = require("fs");
+const readline = require("readline");
+let stdinInputLines = null;
 
 function makeFile(content) {
     const data = [0, content];
@@ -153,6 +155,31 @@ function readFilePromise(path) {
             }
         });
     });
+}
+
+/**
+ * Validate input arguments
+ */
+function validateInputArgs() {
+    if (process.argv.length < 4) {
+        println("Usage: node orthos.js <dictionary> <pattern-in> <pattern-out>");
+        process.exit(1);
+    }
+    const dictPath = process.argv[2];
+    const patInPath = process.argv[3];
+    if (!fs.existsSync(dictPath)) {
+        println("Error: Dictionary file not found: " + dictPath);
+        process.exit(1);
+    }
+    if (!fs.statSync(dictPath).isFile()) {
+        println("Error: Dictionary path is not a file: " + dictPath);
+        process.exit(1);
+    }
+    const stats = fs.statSync(dictPath);
+    if (stats.size > 50 * 1024 * 1024) {
+        println("Error: Dictionary file exceeds 50 MB size limit: " + dictPath);
+        process.exit(1);
+    }
 }
 
 /**
@@ -406,21 +433,24 @@ let max_pat;//largest hyphenation value found in any pattern
  */
 const cp = require("child_process");
 const logger = cp.fork(require("path").resolve(__dirname, "logger.js"));
+process.on("exit", function () { logger.kill(); });
+process.on("SIGINT", function () { logger.kill(); process.exit(1); });
+process.on("SIGTERM", function () { logger.kill(); process.exit(1); });
 
 function print(s) {
-    logger.send(s);
-    //process.stdout.write(s);
+    process.stdout.write(s);
 }
 
 function println(s) {
-    logger.send(s + "\n");
-    //process.stdout.write(s + "\n");
+    process.stdout.write(s + "\n");
 }
+
+validateInputArgs();
 
 //block 10
 function error(msg) {
     println(msg);
-    process.exit(0);
+    process.exit(1);
 
 }
 function overflow(msg1) {
@@ -833,15 +863,15 @@ function bad_input(msg) {
 
 //block 52
 function read_buf(file) {
-    buf = [];
-    do {
-        buf.push(file.data[1][file.data[0]]);
-        file.data[0] += 1;
-    } while (!file.eof() && file.data[1][file.data[0]] !== "\n");
-    buf_len = buf.length;
-    if (!file.eof()) {
-        file.data[0] += 1;
+    var nl = file.data[1].indexOf("\n", file.data[0]);
+    if (nl === -1) {
+        buf = file.data[1].slice(file.data[0]).split("");
+        file.data[0] = file.data[1].length;
+    } else {
+        buf = file.data[1].slice(file.data[0], nl).split("");
+        file.data[0] = nl + 1;
     }
+    buf_len = buf.length;
 }
 
 
@@ -1414,15 +1444,28 @@ function generateLevel() {
 }
 
 function askDoDictionary() {
-    const readline = require("readline");
-    const rl = readline.createInterface(process.stdin, process.stdout);
+    if (stdinInputLines) {
+        const chunk = (stdinInputLines.shift() || "n").trim();
+        if (chunk === "y" || chunk === "Y") {
+            do_dictionary();
+            logger.send("SIGHUP");
+        } else {
+            logger.send("SIGHUP");
+            process.exit(0);
+        }
+        return;
+    }
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
+    let responded = false;
     rl.setPrompt("hyphenate word list? ");
     rl.prompt();
 
     rl.on("line", function (line) {
+        if (responded) { return; }
+        responded = true;
         const chunk = line.trim();
+        rl.close();
         if (chunk === "y" || chunk === "Y") {
-            rl.close();
             do_dictionary();
             logger.send("SIGHUP");
         } else {
@@ -1447,11 +1490,11 @@ function doLevels(currLevel) {
     } else {
         find_letters(trie_l[trie_root], 1);
         output_patterns(trie_root, 1);
-        patout.save(process.argv[4]).catch(
-            function (err) {
-                println(err);
-            }
-        );
+        try {
+            fs.writeFileSync(process.argv[4], patout.data[1], "utf-8");
+        } catch (err) {
+            println(err);
+        }
         //block 97
         procesp = false;
         hyphp = true;
@@ -1461,84 +1504,126 @@ function doLevels(currLevel) {
 
 //var profiler = require("v8-profiler");
 function getGBT(currLevel) {
-    const readline = require("readline");
-    const rl = readline.createInterface(process.stdin, process.stdout);
+    if (stdinInputLines) {
+        let n1 = undefined, n2 = undefined, n3 = undefined;
+        while (stdinInputLines.length > 0) {
+            const chunks = stdinInputLines.shift().trim().split(" ");
+            if (chunks.length >= 3) {
+                n1 = parseInt(chunks[0], 10);
+                n2 = parseInt(chunks[1], 10);
+                n3 = parseInt(chunks[2], 10);
+            } else if (chunks.length === 1) {
+                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
+                else if (n2 === undefined) { n2 = parseInt(chunks[0], 10); continue; }
+                else { n3 = parseInt(chunks[0], 10); }
+            } else { continue; }
+            if (n1 >= 1 && n2 >= 1 && n3 >= 1) {
+                good_wt = n1; bad_wt = n2; thresh = n3;
+                generateLevel();
+                return doLevels(currLevel + 1);
+            }
+            n1 = undefined; n2 = undefined; n3 = undefined;
+        }
+        println("Specify good weight, bad weight, threshold>=1 !");
+        process.exit(1);
+    }
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
     let n1;
     let n2;
     let n3;
+    let responded = false;
     rl.setPrompt("good weight, bad weight, threshold: ");
     rl.prompt();
 
     rl.on("line", function (line) {
+        if (responded) { return; }
         const chunks = line.trim().split(" ");
         if (chunks.length >= 3) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
             n3 = parseInt(chunks[2], 10);
-            rl.pause();
         } else if (chunks.length === 1) {
             if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10);
+                n1 = parseInt(chunks[0], 10); return;
             } else if (n2 === undefined) {
-                n2 = parseInt(chunks[0], 10);
+                n2 = parseInt(chunks[0], 10); return;
             } else {
                 n3 = parseInt(chunks[0], 10);
-                rl.pause();
             }
-        }
-    }).on("pause", function () {
+        } else { return; }
         if (n1 >= 1 && n2 >= 1 && n3 >= 1) {
+            responded = true;
             good_wt = n1;
             bad_wt = n2;
             thresh = n3;
             rl.close();
             //profiler.startProfiling("generateLevel", true);
             generateLevel();
-            /*var profile1 = profiler.stopProfiling();
-            profile1.export(function (ignore, result) {
-                fs.writeFileSync("profile" + currLevel + ".cpuprofile", result);
-                profile1.delete();
-            });*/
-
             doLevels(currLevel + 1);
         } else {
             println("Specify good weight, bad weight, threshold>=1 !");
-            getGBT(currLevel);
+            n1 = undefined;
+            n2 = undefined;
+            n3 = undefined;
+            rl.setPrompt("good weight, bad weight, threshold: ");
+            rl.prompt();
         }
     });
 }
 
 function getPat(currLevel) {
-    const readline = require("readline");
-    const rl = readline.createInterface(process.stdin, process.stdout);
+    if (stdinInputLines) {
+        let n1 = undefined, n2 = undefined;
+        while (stdinInputLines.length > 0) {
+            const chunks = stdinInputLines.shift().trim().split(" ");
+            if (chunks.length >= 2) {
+                n1 = parseInt(chunks[0], 10);
+                n2 = parseInt(chunks[1], 10);
+            } else if (chunks.length === 1) {
+                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
+                else { n2 = parseInt(chunks[0], 10); }
+            } else { continue; }
+            if (n1 >= 1 && n1 <= n2 && n2 <= max_dot) {
+                pat_start = n1; pat_finish = n2;
+                return getGBT(currLevel);
+            }
+            n1 = undefined; n2 = undefined;
+        }
+        println("Specify 1<=pat_start<=pat_finish<=" + max_dot + " !");
+        process.exit(1);
+    }
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
     let n1;
     let n2;
+    let responded = false;
     rl.setPrompt("pat_start, pat_finish: ");
     rl.prompt();
 
     rl.on("line", function (line) {
+        if (responded) { return; }
         const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
-            rl.pause();
         } else if (chunks.length === 1) {
             if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10);
+                n1 = parseInt(chunks[0], 10); return;
             } else {
                 n2 = parseInt(chunks[0], 10);
-                rl.pause();
             }
-        }
-    }).on("pause", function () {
+        } else { return; }
         if (n1 >= 1 && n1 <= n2 && n2 <= max_dot) {
+            responded = true;
             pat_start = n1;
             pat_finish = n2;
             rl.close();
             getGBT(currLevel);
         } else {
             println("Specify 1<=pat_start<=pat_finish<=" + max_dot + " !");
-            getPat(currLevel);
+            n1 = undefined;
+            n2 = undefined;
+            rl.setPrompt("pat_start, pat_finish: ");
+            rl.prompt();
         }
     });
 }
@@ -1547,36 +1632,58 @@ function getPat(currLevel) {
 
 
 function getHyph() {
-    const readline = require("readline");
-    const rl = readline.createInterface(process.stdin, process.stdout);
+    if (stdinInputLines) {
+        let n1 = undefined, n2 = undefined;
+        while (stdinInputLines.length > 0) {
+            const chunks = stdinInputLines.shift().trim().split(" ");
+            if (chunks.length >= 2) {
+                n1 = parseInt(chunks[0], 10);
+                n2 = parseInt(chunks[1], 10);
+            } else if (chunks.length === 1) {
+                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
+                else { n2 = parseInt(chunks[0], 10); }
+            } else { continue; }
+            if (n1 >= 1 && n1 < max_val && n2 >= 1 && n2 < max_val) {
+                hyph_start = n1; hyph_finish = n2;
+                return doLevels(hyph_start);
+            }
+            n1 = undefined; n2 = undefined;
+        }
+        println("Specify 1<=hyph_start,hyph_finish<=" + (max_val - 1) + " !");
+        process.exit(1);
+    }
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
     let n1;
     let n2;
+    let responded = false;
     rl.setPrompt("hyph_start, hyph_finish: ");
     rl.prompt();
 
     rl.on("line", function (line) {
+        if (responded) { return; }
         const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
-            rl.pause();
         } else if (chunks.length === 1) {
             if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10);
+                n1 = parseInt(chunks[0], 10); return;
             } else {
                 n2 = parseInt(chunks[0], 10);
-                rl.pause();
             }
-        }
-    }).on("pause", function () {
+        } else { return; }
         if (n1 >= 1 && n1 < max_val && n2 >= 1 && n2 < max_val) {
+            responded = true;
             hyph_start = n1;
             hyph_finish = n2;
             rl.close();
             doLevels(hyph_start);
         } else {
             println("Specify 1<=hyph_start,hyph_finish<=" + (max_val - 1) + " !");
-            getHyph();
+            n1 = undefined;
+            n2 = undefined;
+            rl.setPrompt("hyph_start, hyph_finish: ");
+            rl.prompt();
         }
     });
 }
@@ -1598,7 +1705,8 @@ function collectAndSetChars() {
         }
         dictionary.data[0] += 1;
     }
-    charsA = Array.from(charsS);
+    charsA = [];
+    charsS.forEach(function (v) { charsA.push(v); });
     charsA.sort((a, b) => a - b);
     charsA.forEach(function setChar(cc) {
         const c = String.fromCharCode(cc);
@@ -1637,38 +1745,58 @@ function main() {
 }
 
 function getLeftRightHyphenMin() {
-    const readline = require("readline");
-    const rl = readline.createInterface(process.stdin, process.stdout);
+    if (stdinInputLines) {
+        let n1 = undefined, n2 = undefined;
+        while (stdinInputLines.length > 0) {
+            const chunks = stdinInputLines.shift().trim().split(" ");
+            if (chunks.length >= 2) {
+                n1 = parseInt(chunks[0], 10);
+                n2 = parseInt(chunks[1], 10);
+            } else if (chunks.length === 1) {
+                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
+                else { n2 = parseInt(chunks[0], 10); }
+            } else { continue; }
+            if (n1 >= 1 && n1 < 15 && n2 >= 1 && n2 < 15) {
+                left_hyphen_min = n1; right_hyphen_min = n2;
+                return main();
+            }
+            n1 = undefined; n2 = undefined;
+        }
+        println("Specify 1<=left_hyphen_min,right_hyphen_min<=15 !");
+        process.exit(1);
+    }
+    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
     let n1;
     let n2;
+    let responded = false;
     rl.setPrompt("left_hyphen_min, right_hyphen_min: ");
     rl.prompt();
 
     rl.on("line", function (line) {
-        line = line.trim();
+        if (responded) { return; }
         const chunks = line.trim().split(" ");
         if (chunks.length >= 2) {
             n1 = parseInt(chunks[0], 10);
             n2 = parseInt(chunks[1], 10);
-            rl.pause();
         } else if (chunks.length === 1) {
             if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10);
+                n1 = parseInt(chunks[0], 10); return;
             } else {
                 n2 = parseInt(chunks[0], 10);
-                rl.pause();
             }
-        }
-    }).on("pause", function () {
+        } else { return; }
         if (n1 >= 1 && n1 < 15 && n2 >= 1 && n2 < 15) {
+            responded = true;
             left_hyphen_min = n1;
             right_hyphen_min = n2;
             rl.close();
             main();
         } else {
-            rl.close();
             println("Specify 1<=left_hyphen_min,right_hyphen_min<=15 !");
-            getLeftRightHyphenMin();
+            n1 = undefined;
+            n2 = undefined;
+            rl.setPrompt("left_hyphen_min, right_hyphen_min: ");
+            rl.prompt();
         }
     });
 }
@@ -1676,6 +1804,16 @@ function getLeftRightHyphenMin() {
 function init() {
     println(banner);
     initialize();
+    if (!process.stdin.isTTY) {
+        try {
+            const buf = fs.readFileSync(0, {encoding: "utf-8"});
+            if (buf) {
+                stdinInputLines = buf.trim().split("\n");
+            }
+        } catch (e) {
+            println("Warning: could not read stdin: " + e.message);
+        }
+    }
     getLeftRightHyphenMin();
 }
 

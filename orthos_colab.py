@@ -66,8 +66,6 @@ def install_dependencies():
             print("⚠️  Warning: CuPy or Numba not found. GPU acceleration will not work.")
             print("   Please install them: pip install numpy numba cupy-cuda12x")
 
-install_dependencies()
-
 # ==========================================
 # IMPORTS
 # ==========================================
@@ -539,11 +537,37 @@ class OrthosEngine:
 
     def _grow_trie(self):
         """Double trie array sizes when capacity is exceeded."""
+        old_size = self.trie_size
         new_size = self.trie_size * 2
         self.trie_c = np.concatenate([self.trie_c, np.zeros(new_size - self.trie_size, dtype=np.int32)])
         self.trie_l = np.concatenate([self.trie_l, np.zeros(new_size - self.trie_size, dtype=np.int32)])
         self.trie_r = np.concatenate([self.trie_r, np.zeros(new_size - self.trie_size, dtype=np.int32)])
         self.trie_taken = np.concatenate([self.trie_taken, np.zeros(new_size - self.trie_size, dtype=np.uint8)])
+
+        # Link new entries into the free list (anchored at trie_l[0] / trie_r[trie_max + 1]).
+        # The free list is a doubly-linked list.  Find its tail and append the new range.
+        tail = 0
+        t = int(self.trie_l[0])
+        while t != 0:
+            tail = t
+            t = int(self.trie_l[t])
+
+        if tail == 0:
+            self.trie_l[0] = old_size
+            self.trie_r[old_size] = 0
+        else:
+            self.trie_l[tail] = old_size
+            self.trie_r[old_size] = tail
+
+        for i in range(old_size, new_size - 1):
+            self.trie_taken[i] = 0
+            self.trie_l[i] = i + 1
+            self.trie_r[i + 1] = i
+            self.trie_c[i] = 0
+        self.trie_taken[new_size - 1] = 0
+        self.trie_l[new_size - 1] = 0
+        self.trie_c[new_size - 1] = 0
+
         self.trie_size = new_size
         print(f"   Trie grew to {new_size} entries ({new_size * 13 / 1024 / 1024:.1f} MB)")
 
@@ -796,11 +820,11 @@ class OrthosEngine:
 
     def load_patterns(self, filepath):
         print(f"📖 Loading patterns from {filepath}...")
-        if not os.path.exists(filepath):
+        try:
+            self.validate_file(filepath)
+        except FileNotFoundError:
             print(f"   File not found. Starting with empty patterns.")
             return
-
-        self.validate_file(filepath)
 
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -903,6 +927,55 @@ class OrthosEngine:
                 self.op_count -= 1
         self.qmax_thresh = 7
 
+    def _aggregate_candidates(self, valid_patterns, valid_weights, pat_dot, hyph_level, good_wt, bad_wt, thresh):
+        """Shared aggregation logic for GPU and CPU candidate extraction."""
+        if hasattr(valid_patterns, 'get'):
+            valid_patterns = valid_patterns.get()
+            valid_weights = valid_weights.get()
+
+        if valid_patterns.shape[0] == 0:
+            return 0, 0
+
+        pat_len = valid_patterns.shape[1]
+        keys = tuple(valid_patterns[:, i] for i in range(pat_len - 1, -1, -1))
+        sorted_indices = np.lexsort(keys)
+
+        sorted_patterns = valid_patterns[sorted_indices]
+        sorted_weights = valid_weights[sorted_indices]
+
+        diff = sorted_patterns[1:] != sorted_patterns[:-1]
+        boundaries = np.any(diff, axis=1)
+
+        run_ids = np.zeros(len(sorted_patterns), dtype=np.int32)
+        run_ids[1:] = np.cumsum(boundaries)
+
+        num_unique = int(run_ids[-1]) + 1
+        unique_weights = np.zeros((num_unique, 2), dtype=np.float32)
+        np.add.at(unique_weights, run_ids, sorted_weights)
+
+        change_points = np.flatnonzero(boundaries) + 1
+        unique_indices = np.concatenate((np.array([0]), change_points))
+        unique_patterns_arr = sorted_patterns[unique_indices]
+
+        good_pat_count = 0
+        bad_pat_count = 0
+
+        for i in range(num_unique):
+            w_good = unique_weights[i, 0]
+            w_bad = unique_weights[i, 1]
+            pat = unique_patterns_arr[i].tolist()
+            try:
+                if (good_wt * w_good) < thresh:
+                    self.insert_pattern(pat, MAX_VAL, pat_dot)
+                    bad_pat_count += 1
+                elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
+                    self.insert_pattern(pat, hyph_level, pat_dot)
+                    good_pat_count += 1
+            except RuntimeError:
+                pass
+
+        return good_pat_count, bad_pat_count
+
     def do_dictionary_gpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
         if not self.gpu_available:
             print("⚠️ GPU not available. Switching to CPU.")
@@ -913,12 +986,9 @@ class OrthosEngine:
 
         n_words = self.words.shape[0]
 
-        # Reuse pre-allocated buffers
-        # Reset them to 0 or initial state
         self.d_hvals.fill(0)
         self.d_no_more.fill(0)
 
-        # Reset dots working copy efficiently
         cp.copyto(self.d_dots_working, self.d_dots)
 
         threadsperblock = 128
@@ -955,14 +1025,9 @@ class OrthosEngine:
         dot_max = pat_len - pat_dot
         if dot_max < (right_hyphen_min + 1): dot_max = right_hyphen_min + 1
 
-        # BOLT OPTIMIZATION: Use Coalesced Memory Layout (order='F')
-        # Structure: (n_words, MAX_LEN, pat_len)
-        # This ensures threads accessing the same 'k' and 'dpos' but different 'idx' (word index)
-        # access adjacent memory locations, maximizing memory bandwidth.
         d_out_patterns = cp.zeros((n_words, MAX_LEN, pat_len), dtype=cp.uint32, order='F')
         d_out_weights = cp.zeros((n_words, MAX_LEN, 2), dtype=cp.float32, order='F')
 
-        # Reuse pre-allocated mask (reset to 0)
         self.d_out_mask.fill(0)
 
         # 3. Extract Candidates
@@ -973,57 +1038,11 @@ class OrthosEngine:
             d_out_patterns, d_out_weights, self.d_out_mask
         )
 
-        # Aggregation
+        # 4. Aggregate (shared logic)
         mask = self.d_out_mask.astype(bool)
         valid_patterns = d_out_patterns[mask]
         valid_weights = d_out_weights[mask]
-
-        if valid_patterns.shape[0] == 0:
-            return 0, 0
-
-        # Lexsort
-        keys = cp.vstack([valid_patterns[:, i] for i in range(pat_len - 1, -1, -1)])
-        sorted_indices = cp.lexsort(keys)
-
-        sorted_patterns = valid_patterns[sorted_indices]
-        sorted_weights = valid_weights[sorted_indices]
-
-        diff = sorted_patterns[1:] != sorted_patterns[:-1]
-        boundaries = cp.any(diff, axis=1)
-
-        run_ids = cp.zeros(len(sorted_patterns), dtype=cp.int32)
-        run_ids[1:] = cp.cumsum(boundaries)
-
-        num_unique = int(run_ids[-1]) + 1
-        unique_weights = cp.zeros((num_unique, 2), dtype=cp.float32)
-        cp.add.at(unique_weights, run_ids, sorted_weights)
-
-        change_points = cp.flatnonzero(boundaries) + 1
-        unique_indices = cp.concatenate((cp.array([0]), change_points))
-        unique_patterns_arr = sorted_patterns[unique_indices]
-
-        # Transfer back to CPU
-        cpu_weights = unique_weights.get()
-        cpu_patterns = unique_patterns_arr.get()
-
-        good_pat_count = 0
-        bad_pat_count = 0
-
-        for i in range(num_unique):
-            w_good = cpu_weights[i, 0]
-            w_bad = cpu_weights[i, 1]
-            pat = cpu_patterns[i].tolist()
-            try:
-                if (good_wt * w_good) < thresh:
-                    self.insert_pattern(pat, MAX_VAL, pat_dot)
-                    bad_pat_count += 1
-                elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
-                    self.insert_pattern(pat, hyph_level, pat_dot)
-                    good_pat_count += 1
-            except RuntimeError:
-                pass
-        
-        return good_pat_count, bad_pat_count
+        return self._aggregate_candidates(valid_patterns, valid_weights, pat_dot, hyph_level, good_wt, bad_wt, thresh)
 
     def do_dictionary_cpu(self, pat_len, pat_dot, hyph_level, good_wt, bad_wt, thresh, left_hyphen_min, right_hyphen_min):
         """CPU Fallback implementation using Numba"""
@@ -1081,57 +1100,11 @@ class OrthosEngine:
             out_patterns, out_weights, out_mask
         )
 
-        # Aggregation
+        # 4. Aggregate (shared logic)
         mask = out_mask.astype(bool)
         valid_patterns = out_patterns[mask]
         valid_weights = out_weights[mask]
-
-        if valid_patterns.shape[0] == 0:
-            return 0, 0
-
-        # Lexsort (NumPy)
-        # np.lexsort takes keys in reverse order of significance
-        keys = tuple(valid_patterns[:, i] for i in range(pat_len - 1, -1, -1))
-        sorted_indices = np.lexsort(keys)
-
-        sorted_patterns = valid_patterns[sorted_indices]
-        sorted_weights = valid_weights[sorted_indices]
-
-        # Find boundaries
-        diff = sorted_patterns[1:] != sorted_patterns[:-1]
-        boundaries = np.any(diff, axis=1)
-
-        run_ids = np.zeros(len(sorted_patterns), dtype=np.int32)
-        run_ids[1:] = np.cumsum(boundaries)
-
-        num_unique = int(run_ids[-1]) + 1
-        unique_weights = np.zeros((num_unique, 2), dtype=np.float32)
-
-        # Aggregation loop (np.add.at is slow, simple loop might be faster for CPU or stick to np.add.at)
-        np.add.at(unique_weights, run_ids, sorted_weights)
-
-        change_points = np.flatnonzero(boundaries) + 1
-        unique_indices = np.concatenate((np.array([0]), change_points))
-        unique_patterns_arr = sorted_patterns[unique_indices]
-
-        good_pat_count = 0
-        bad_pat_count = 0
-
-        for i in range(num_unique):
-            w_good = unique_weights[i, 0]
-            w_bad = unique_weights[i, 1]
-            pat = unique_patterns_arr[i].tolist()
-            try:
-                if (good_wt * w_good) < thresh:
-                    self.insert_pattern(pat, MAX_VAL, pat_dot)
-                    bad_pat_count += 1
-                elif (good_wt * w_good - bad_wt * w_bad) >= thresh:
-                    self.insert_pattern(pat, hyph_level, pat_dot)
-                    good_pat_count += 1
-            except RuntimeError:
-                pass
-
-        return good_pat_count, bad_pat_count
+        return self._aggregate_candidates(valid_patterns, valid_weights, pat_dot, hyph_level, good_wt, bad_wt, thresh)
 
     def export_patterns(self, filename):
         patterns_list = []
@@ -1305,6 +1278,7 @@ def input_gbt():
             pass
 
 def main():
+    install_dependencies()
     parser = argparse.ArgumentParser(description="Orthos PatGen on GPU")
     parser.add_argument("dictionary", nargs='?', help="Path to dictionary file")
     parser.add_argument("pattern_in", nargs='?', help="Path to input pattern file")

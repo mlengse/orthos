@@ -428,3 +428,75 @@ class TestLoadPatterns:
         engine.load_patterns("/nonexistent/path/patterns.pat")
         pats = _collect_pattern_tuples(engine)
         assert len(pats) == 0
+
+
+# ============================================================
+# Integration test: end-to-end generation
+# ============================================================
+
+class TestEndToEnd:
+    """End-to-end integration tests for do_dictionary with known data."""
+
+    def _make_dic(self, engine, lines):
+        """Load a temporary dictionary into the engine."""
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".dic", delete=False, encoding="utf-8"
+        )
+        for line in lines:
+            f.write(line + "\n")
+        f.close()
+        try:
+            engine.load_dictionary(f.name)
+        finally:
+            os.unlink(f.name)
+
+    def test_generate_level_produces_patterns(self, engine):
+        """Full pipeline: load dictionary, run level, check patterns output."""
+        self._make_dic(engine, ["ka-ta", "ba-cu", "su-su"])
+        engine.load_patterns("/nonexistent/path/patterns.pat")
+
+        # Run one level: pat_len=1, pat_dot=0,1; hyph_level=1
+        good, bad = engine.do_dictionary_cpu(
+            pat_len=1, pat_dot=0, hyph_level=1,
+            good_wt=1, bad_wt=1, thresh=1,
+            left_hyphen_min=1, right_hyphen_min=1
+        )
+        assert good >= 0
+        assert bad >= 0
+
+        # Check patterns were inserted into the trie
+        pats = _collect_pattern_tuples(engine)
+        # With the given inputs, at least some patterns should be generated
+        assert len(pats) > 0, "Expected at least one pattern from level 1"
+
+    def test_do_dictionary_cpu_returns_counts(self, engine):
+        """do_dictionary_cpu returns (good, bad) counts."""
+        self._make_dic(engine, ["a-a"])
+        engine.load_patterns("/nonexistent/path/patterns.pat")
+
+        good, bad = engine.do_dictionary_cpu(
+            pat_len=1, pat_dot=0, hyph_level=1,
+            good_wt=1, bad_wt=1, thresh=1,
+            left_hyphen_min=1, right_hyphen_min=1
+        )
+        assert isinstance(good, int)
+        assert isinstance(bad, int)
+        assert good >= 0
+        assert bad >= 0
+
+    def test_export_after_generation_creates_file(self, engine, tmp_path):
+        """Run generation then export — file should contain patterns."""
+        self._make_dic(engine, ["ka-ta", "na-ba", "pa-da"])
+        engine.load_patterns("/nonexistent/path/patterns.pat")
+
+        _, _ = engine.do_dictionary_cpu(
+            pat_len=1, pat_dot=0, hyph_level=1,
+            good_wt=1, bad_wt=1, thresh=1,
+            left_hyphen_min=1, right_hyphen_min=1
+        )
+
+        out = tmp_path / "out.tex"
+        engine.export_patterns(str(out))
+        content = out.read_text(encoding="utf-8")
+        assert "\\patterns{" in content
+        assert len(content) > 20  # at least some pattern data

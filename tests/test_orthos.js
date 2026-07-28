@@ -119,6 +119,56 @@ async function main() {
         assert.ok(stdout.includes("patterns read in"), "Should report patterns read");
     });
 
+    await test("Output patterns have valid TeX format", async () => {
+        const patOut = path.join(TMP, "out.pat");
+        const content = fs.readFileSync(patOut, "utf-8");
+        const lines = content.trim().split("\n");
+        assert.ok(lines.length > 0, "Output should have pattern lines");
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            // Valid pattern: digits interleaved with letters, e.g. "1k" or "ka1t"
+            assert.ok(/^[0-9]*[a-z]+[0-9]*$/.test(trimmed),
+                "Pattern line '" + trimmed + "' should be digits+letters");
+        }
+    });
+
+    await test("Output contains correct good patterns from hyphen boundaries", async () => {
+        const patOut = path.join(TMP, "out.pat");
+        const content = fs.readFileSync(patOut, "utf-8");
+        const lines = content.trim().split("\n");
+        // With pat_len=1, pat_dot=0 and good_wt=bad_wt=thresh=1:
+        // 't' from ka-ta, 'c' from ba-cu, 's' from su-su are good patterns
+        assert.ok(lines.includes("1t"), "Patterns should include '1t' from ka-ta");
+        assert.ok(lines.includes("1c"), "Patterns should include '1c' from ba-cu");
+        assert.ok(lines.includes("1s"), "Patterns should include '1s' from su-su");
+        // Each pattern should appear exactly once
+        const countT = lines.filter(l => l === "1t").length;
+        const countC = lines.filter(l => l === "1c").length;
+        const countS = lines.filter(l => l === "1s").length;
+        assert.strictEqual(countT, 1, "'1t' should appear exactly once");
+        assert.strictEqual(countC, 1, "'1c' should appear exactly once");
+        assert.strictEqual(countS, 1, "'1s' should appear exactly once");
+    });
+
+    await test("No arguments exits with code 1", async () => {
+        const child = spawn("node", [ORTHOS], { stdio: ["pipe", "pipe", "pipe"] });
+        const { code } = await new Promise((resolve) => {
+            let stdout = "";
+            child.stdout.on("data", (d) => { stdout += d; });
+            child.on("close", (code) => resolve({ code, stdout }));
+        });
+        assert.strictEqual(code, 1, "No-args should exit with code 1");
+    });
+
+    await test("Bad dictionary file exits with code 1", async () => {
+        const child = spawn("node", [ORTHOS, "/nonexistent/file.dic", "/nonexistent/pat.pat", "out.pat"], { stdio: ["pipe", "pipe", "pipe"] });
+        const { code } = await new Promise((resolve) => {
+            child.on("close", (code) => resolve({ code }));
+        });
+        assert.strictEqual(code, 1, "Missing input file should exit with code 1");
+    });
+
     teardown();
 
     console.log(`\n${passed} passed, ${failed} failed`);
