@@ -24,7 +24,6 @@ def run_js(dic_path, pat_in_path, pat_out_path):
         proc.stdin.write(line + "\n")
         proc.stdin.flush()
         time.sleep(0.4)
-    proc.stdin.close()
     stdout, stderr = proc.communicate(timeout=30)
     return proc.returncode, stdout, stderr
 
