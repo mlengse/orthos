@@ -1805,16 +1805,17 @@ function init() {
     println(banner);
     initialize();
     if (!process.stdin.isTTY) {
-        try {
-            const buf = fs.readFileSync(0, {encoding: "utf-8"});
-            if (buf) {
-                stdinInputLines = buf.trim().split("\n");
-            }
-        } catch (e) {
-            println("Warning: could not read stdin: " + e.message);
-        }
+        const rl = readline.createInterface({input: process.stdin});
+        stdinInputLines = [];
+        rl.on("line", function (line) {
+            stdinInputLines.push(line);
+        });
+        rl.on("close", function () {
+            getLeftRightHyphenMin();
+        });
+    } else {
+        getLeftRightHyphenMin();
     }
-    getLeftRightHyphenMin();
 }
 
 //When filereading promises are fullfilled, start computations
