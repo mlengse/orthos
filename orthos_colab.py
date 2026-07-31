@@ -578,6 +578,7 @@ class OrthosEngine:
             s = int(t) - int(self.trieq_c[1])
             if s < 0 or s > self.trie_size - len(self.xext):
                 self._grow_trie()
+                continue
             if s < 0 or s > self.trie_size - len(self.xext):
                 raise RuntimeError("Trie Overflow")
 
@@ -588,6 +589,9 @@ class OrthosEngine:
                 self.trie_c[idx] = 0
                 self.trie_l[idx] = self.trie_bmax + len(self.xext)
                 self.trie_r[self.trie_bmax + len(self.xext)] = idx
+
+            if self.trie_l[0] != 0:
+                self.trie_r[self.trie_l[0]] = 0
 
             if self.trie_taken[s] == 0:
                 q = self.qmax
