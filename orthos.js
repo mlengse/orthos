@@ -183,30 +183,28 @@ function validateInputArgs() {
 }
 
 /**
- * Get promises for input files
+ * Promises resolving to string contents of CLI-provided input files
  */
 const dictionaryProm = readFilePromise(process.argv[2]);
 const patternInProm = readFilePromise(process.argv[3]);
 
 /**
- * Create output files
+ * File proxy holding the generated output patterns
  */
 const patout = makeFile("");
 
 /**
- * variables for fullfilled file promises
+ * File proxy objects initialized when file promises fulfill
  */
 let dictionary;
 let patterns;
 
-
 /**
  * Globally defined const and var/let
- * Todo:
- * [] Comment each var/const/let
- * [] Check which vars/consts could be made local or eliminated
- * [] Check if some var/let can be redefined as const
- * [] use let instead of var (beware no-opt of compound let statements)
+ * [x] Comment each var/const/let
+ * [x] Check which vars/consts could be made local or eliminated
+ * [x] Check if some var/let can be redefined as const
+ * [x] use let instead of var (beware no-opt of compound let statements)
  */
 
 /**
@@ -215,49 +213,51 @@ let patterns;
 const banner = "This is orthos.js for node.js, Version 1.0b";
 
 /**
- * space for pattern trie
- * originally this was 55000, but that's to small for the german dictionary
+ * Allocated space for pattern trie typed arrays
+ * Originally this was 55000, expanded for large dictionaries
  */
-const trie_size = 55000 * 40;  // Reduced from 55000*80 (43 MB → 22 MB)
+const trie_size = 55000 * 40;  // Reduced from 55000*80 (43 MB -> 22 MB)
 
 /**
- * space for pattern count trie, must be less than trie_size and greater
- * than the number of occurrences of any pattern in the dictionary
- * originally this was 26000, but that's to small for the german dictionary
+ * Allocated space for pattern count trie typed arrays
+ * Must be less than trie_size and greater than the number of occurrences of any pattern
  */
 const triec_size = 32000 * 80;
 
 /**
- * size of output hash table, should be a multiple of 510 (= 2*255)
+ * Maximum capacity of output hash table (should be a multiple of 510)
  */
 const max_ops = 510 * 10;
 
 /**
- * maximum number of levels+1, also used to denote bad patterns
+ * Maximum hyphenation value level + 1; also used to denote bad patterns
  */
 const max_val = 10;
 
 /**
- * maximum pattern length,
- * also maximum length of external representation of a 'letter'
+ * Maximum pattern length and max length of external representation of a letter
  */
 const max_dot = 15;
 
 /**
- * maximum word length,
+ * Maximum word length supported
  */
 const max_len = 50;
 
 /**
- * maximum length of input lines, at least max_len
- * originaly this was const set to 80, but it's faster
- * to dynamically assign the buf-array and push new values.
+ * Length of the currently active line buffer `buf`
  */
 let buf_len;
 
 /**
- * The following vars are the parameters for orthos.js
- * They are prompted to the user for each run.
+ * Parameters for orthos.js prompted interactively during execution:
+ * pat_start: starting pattern length
+ * pat_finish: ending pattern length
+ * hyph_start: starting hyphenation level
+ * hyph_finish: ending hyphenation level
+ * good_wt: weight assigned to good hyphens
+ * bad_wt: weight assigned to bad hyphens
+ * thresh: threshold count for candidate pattern selection
  */
 let pat_start;
 let pat_finish;
@@ -268,88 +268,86 @@ let bad_wt;
 let thresh;
 
 /**
- * For the purpose of this program (see trie creation) each character
- * is mapped to an internal code of type int without any relations to
- * some encoding. The characters '0'...'9' and '.' have special meanings
- * and are used in every language and thus always mapped to the same int:
- * '0'->0 ... '9'->9 and '.'->10 (see function initialize())
- * '.' marks the beginning an end of a word. A pattern like '.ab1' only matches
- * at the beginning of a word that begins with 'ab' while a pattern like 'ab1'
- * matches at every position in a word.
+ * Internal integer code for edge of word marker (mapped to '.')
  */
 let edge_of_word;
 
 /**
- * When reading the dictionary and patterns the characters have to be
- * recognized as fast as possible. Reading the charCode and then decide
- * what kind of character it is takes to much time.
- * Thus we traverse the dictionary at the beginning and collect all characters,
- * map them to a internalCharCode and assign them a class.
- *
- * xint: charCode -> internalCharCode
- * xext: internalCharCode -> char
- * xdig: value -> digit
- * xclass: char -> one of the following classes:
- *
+ * Character class identifiers and hyphen status values:
  * digit_class: chars '0'...'9' (hyphen values or weights)
- * hyf_class: chars '.', '-' and '*' (bad, missed, good hyphens)
- * letter_class: chars representing a letter
- * invalid_class: chars that should not occur
- *
- * The only char that changes its class is '.':
- * reading dictionary: invalid_class
- * reading patterns: letter_class
- * writing pattmp: hyf_class
+ * hyf_class: chars '.', '-', '*' (bad, missed, good hyphens)
+ * letter_class: alphabetic letters
+ * no_hyf: status representing no hyphen
+ * err_hyf: status representing error hyphen '#'
+ * is_hyf: status representing valid hyphen '-'
+ * found_hyf: status representing found hyphen '*'
  */
 const digit_class = 1;
 const hyf_class = 2;
 const letter_class = 3;
-const no_hyf = 10;// ''
-const err_hyf = 11;// '#'
-const is_hyf = 12;// '-'
-const found_hyf = 13;// '*'
+const no_hyf = 10;
+const err_hyf = 11;
+const is_hyf = 12;
+const found_hyf = 13;
 
+/**
+ * Character mapping lookup objects and arrays:
+ * xclass: charCode -> character class
+ * xint: charCode -> internal integer code
+ * xdig: value -> digit character array
+ * xext: internal integer code -> external character representation array
+ */
 const xclass = {};
 const xint = {};
 let xdig = [];
 const xext = [];
 
 /**
- * cmin...cmax is the range of internalCharCodes (cmax = xext.length - 1)
- * We start at 1 since 0:'0' will never be used in dictionary or pattern
- * cnum is the number of internalCharCodes (cnum = xext.length)
+ * Range of internal character codes:
+ * cmin: minimum code (1)
+ * cmax: maximum internal code assigned (xext.length - 1)
+ * cnum: total number of internal character codes (xext.length)
  */
 const cmin = 1;
 let cmax;
 let cnum;
 
 /**
- * The trie is stored in separate typed arrays:
- * trie_* (pattern trie)
- * triec_* (pattern count trie)
- * *_c (char as internalCharCode)
- * *_l (link resp good count)
- * *_r (back resp bad count or output)
- * *_taken (1: triebase is taken, 0: triebase is free)
- * ops: outputs (Hash-object with three properties)
+ * Pattern trie stored in parallel typed arrays:
+ * trie_c: character internal code
+ * trie_l: link or output index
+ * trie_r: back pointer or right pointer
+ * trie_taken: flag indicating if trie base position is occupied (1) or free (0)
  */
 const trie_c = new Uint32Array(trie_size);
 const trie_l = new Uint32Array(trie_size);
 const trie_r = new Uint32Array(trie_size);
 const trie_taken = new Uint8Array(trie_size);
+
+/**
+ * Pattern count trie stored in parallel typed arrays:
+ * triec_c: character internal code
+ * triec_l: link or good hyphen count
+ * triec_r: back pointer or bad hyphen count
+ * triec_taken: flag indicating if count trie base position is occupied (1) or free (0)
+ */
 const triec_c = new Uint32Array(triec_size);
 const triec_l = new Uint32Array(triec_size);
 const triec_r = new Uint32Array(triec_size);
 const triec_taken = new Uint8Array(triec_size);
+
+/**
+ * Hash table array storing trie output objects {val, dot, op}
+ */
 const ops = [];
 
 /**
- * When some trie state is being worked on, an unpacked version of the state
- * is kept in position 1..qmax of trieq_*
- * qmax_thresh controls the density of first-fit packing (0: sparse)
- * Defaults to 5: After deleting outputs this is set to 7
- * because the trie is sparser
- * Todo: investigate this. Maybe space could be treated for speed
+ * Unpacked state representation arrays for first-fit packing (positions 1..qmax):
+ * trieq_c: character codes
+ * trieq_l: left links
+ * trieq_r: right links
+ * qmax: number of unpacked state nodes
+ * qmax_thresh: density control threshold for first-fit packing
  */
 const trieq_c = new Uint32Array(50);
 const trieq_l = new Uint32Array(50);
@@ -357,57 +355,103 @@ const trieq_r = new Uint32Array(50);
 let qmax;
 let qmax_thresh;
 
-let trie_max;//maximum occupied trie node
-let trie_bmax;//maximum base of trie family
-let trie_count;//number of occupied trie nodes, for space usage statistics
-let op_count;//number of outpust in hash table
-
+/**
+ * Pattern trie bounds and statistics counters:
+ * trie_max: maximum occupied node index in pattern trie
+ * trie_bmax: maximum base index in pattern trie family
+ * trie_count: count of occupied pattern trie nodes
+ * op_count: count of active outputs in hash table
+ */
+let trie_max;
+let trie_bmax;
+let trie_count;
+let op_count;
 
 /**
- * The trie_root is on position 1. A link to 0 marks the end of a pattern
+ * Root node indices for pattern trie and count trie (always 1)
  */
 const trie_root = 1;
 const triec_root = 1;
 
 /**
- * pat is the current pattern of length pat_len
+ * Working pattern buffer and length:
+ * pat: character array buffer (size 50)
+ * pat_len: length of current working pattern
  */
 const pat = new Uint32Array(50);
 let pat_len;
 
-let triec_max;//maximum occupied trie node
-let triec_bmax;//maximum base of trie family
-let triec_count;//number of occupied trie nodes, for space usage statistics
-let triec_kmax;//shows growth of trie during pass
-let pat_count;//number of patterns in count trie
-
-const word = new Uint8Array(max_len);//current word
-const dots = new Uint8Array(max_len);//current hyphens
-const dotw = new Uint8Array(max_len);//dot weights
-const hval = new Uint8Array(max_len);//hyphenation values
-const no_more = new Uint8Array(max_len);//positions 'knocked out'
-let wlen;//length of current word
-let word_wt;//the global word weight
-let wt_chg;//indicates word_wt has changed
-
-//block 55
-let left_hyphen_min;//minimal length of string before first hyphenatiom
-let right_hyphen_min;//minimal length of string after last hyphenatiom
-
-//block 66
-let good_pat_count;//number of good patterns added at end of pass
-let bad_pat_count;//number of bad patterns added at end of pass
-let good_count;//good hyphen count
-let bad_count;//bad hyphen count
-let miss_count;//missed hyphen coung
-let level_pattern_count;//number of good patterns at level
-let more_to_come;//set to true if the quality of a pattern is ambiguous
+/**
+ * Count trie bounds and statistics counters:
+ * triec_max: maximum occupied node index in count trie
+ * triec_bmax: maximum base index in count trie family
+ * triec_count: count of occupied count trie nodes
+ * triec_kmax: dynamic boundary showing growth of count trie during pass
+ * pat_count: number of patterns stored in count trie
+ */
+let triec_max;
+let triec_bmax;
+let triec_count;
+let triec_kmax;
+let pat_count;
 
 /**
- * If hyphp is set to true, do_dictionary will write out a copy of the
- * dictionary as hyphenated by the current set of patterns. If procesp is
- * set to true, do_dictionary will collect pattern statistics for patterns
- * with length pat_len and hyphen position pat_dot, at level hyph_level.
+ * Working word arrays for word hyphenation analysis:
+ * word: current word internal char codes
+ * dots: current word hyphenation status
+ * dotw: dot weights
+ * hval: calculated hyphenation values
+ * no_more: positions knocked out from consideration
+ */
+const word = new Uint8Array(max_len);
+const dots = new Uint8Array(max_len);
+const dotw = new Uint8Array(max_len);
+const hval = new Uint8Array(max_len);
+const no_more = new Uint8Array(max_len);
+
+/**
+ * Length and weight tracking for current word:
+ * wlen: length of current word
+ * word_wt: global weight assigned to current word
+ * wt_chg: flag indicating word_wt changed
+ */
+let wlen;
+let word_wt;
+let wt_chg;
+
+/**
+ * Minimum character offsets before/after hyphens:
+ * left_hyphen_min: minimal string length before first hyphenation
+ * right_hyphen_min: minimal string length after last hyphenation
+ */
+let left_hyphen_min;
+let right_hyphen_min;
+
+/**
+ * Pass statistics and counters:
+ * good_pat_count: good patterns added at end of pass
+ * bad_pat_count: bad patterns added at end of pass
+ * good_count: good hyphen count
+ * bad_count: bad hyphen count
+ * miss_count: missed hyphen count
+ * level_pattern_count: count of good patterns at current level
+ * more_to_come: true if pattern quality is ambiguous
+ */
+let good_pat_count;
+let bad_pat_count;
+let good_count;
+let bad_count;
+let miss_count;
+let level_pattern_count;
+let more_to_come;
+
+/**
+ * Pass configuration and hyphenation parameters:
+ * procesp: collect pattern statistics if true
+ * hyphp: output hyphenated dictionary if true
+ * pat_dot: hyphen position offset within pattern
+ * hyph_level: active hyphenation level
+ * filnam: output filename for hyphenated dictionary
  */
 let procesp;
 let hyphp;
@@ -415,18 +459,34 @@ let pat_dot;
 let hyph_level;
 let filnam = "";
 
-let hyf_min;//left_hyphen_min + 1
-let hyf_max;//right_hyphen_min + 1
-let hyf_len;//hyf_min + hyf_max
+/**
+ * Calculated hyphenation ranges:
+ * hyf_min: left_hyphen_min + 1
+ * hyf_max: right_hyphen_min + 1
+ * hyf_len: hyf_min + hyf_max
+ */
+let hyf_min;
+let hyf_max;
+let hyf_len;
 
-let good_dot;//is_hyf in odd (collecting) passes, err_hyf in even passes
-let bad_dot;//no_hyf in odd (collecting) passes, found_hyf in even passes
-let dot_min;//analoguos to hyf_min
-let dot_max;//analoguos to hyf_max
-let dot_len;//analoguos to hyf_len
+/**
+ * Dynamic dot classification markers and boundaries for pass:
+ * good_dot: is_hyf in odd passes, err_hyf in even passes
+ * bad_dot: no_hyf in odd passes, found_hyf in even passes
+ * dot_min: minimum dot offset
+ * dot_max: maximum dot offset
+ * dot_len: total dot length range
+ */
+let good_dot;
+let bad_dot;
+let dot_min;
+let dot_max;
+let dot_len;
 
-//block 91
-let max_pat;//largest hyphenation value found in any pattern
+/**
+ * Largest hyphenation value found in any pattern
+ */
+let max_pat;
 
 /**
  * Some helper functions
@@ -848,6 +908,9 @@ function insertc_pat(fpos) {
 const pattmp = makeFile("");
 
 //block 52
+/**
+ * Line buffer array and pointer for current line input
+ */
 let buf = [];
 let buf_ptr;
 
@@ -863,7 +926,7 @@ function bad_input(msg) {
 
 //block 52
 function read_buf(file) {
-    var nl = file.data[1].indexOf("\n", file.data[0]);
+    const nl = file.data[1].indexOf("\n", file.data[0]);
     if (nl === -1) {
         buf = file.data[1].slice(file.data[0]).split("");
         file.data[0] = file.data[1].length;
@@ -1502,7 +1565,7 @@ function doLevels(currLevel) {
     }
 }
 
-//var profiler = require("v8-profiler");
+//const profiler = require("v8-profiler");
 function getGBT(currLevel) {
     if (stdinInputLines) {
         let n1 = undefined, n2 = undefined, n3 = undefined;
