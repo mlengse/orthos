@@ -107,10 +107,16 @@ const readline = require("readline");
 let stdinInputLines = null;
 
 function makeFile(content) {
+    if (content === undefined || content === null) {
+        content = "";
+    } else if (typeof content !== "string") {
+        throw new TypeError("makeFile content must be a string");
+    }
+
     const data = [0, content];
 
     function eof() {
-        return data[0] === data[1].length;
+        return data[0] >= data[1].length;
     }
 
     function reset() {
@@ -118,17 +124,27 @@ function makeFile(content) {
     }
 
     function read() {
+        if (eof()) {
+            throw new RangeError("EOF reached: cannot read beyond file content");
+        }
         const r = data[1].charAt(data[0]);
         data[0] += 1;
         return r;
     }
 
     function write(s) {
-        data[1] += s;
+        if (s === undefined || s === null) {
+            throw new TypeError("Cannot write null or undefined content to File proxy");
+        }
+        data[1] += String(s);
     }
 
     function save(path) {
         return new Promise(function (resolve, reject) {
+            if (!path || typeof path !== "string") {
+                reject(new TypeError("Path must be a non-empty string"));
+                return;
+            }
             fs.writeFile(path, data[1], function (err) {
                 if (err) {
                     reject(err);
@@ -189,8 +205,8 @@ function validateInputArgs() {
 /**
  * Promises resolving to string contents of CLI-provided input files
  */
-const dictionaryProm = readFilePromise(process.argv[2]);
-const patternInProm = readFilePromise(process.argv[3]);
+let dictionaryProm;
+let patternInProm;
 
 /**
  * File proxy holding the generated output patterns
@@ -509,7 +525,6 @@ function println(s) {
     process.stdout.write(s + "\n");
 }
 
-validateInputArgs();
 
 //block 10
 function error(msg) {
@@ -1889,16 +1904,27 @@ function init() {
     }
 }
 
-//When filereading promises are fullfilled, start computations
-Promise.all([dictionaryProm, patternInProm]).then(
-    function (values) {
-        dictionary = makeFile(values[0]);
-        patterns = makeFile(values[1]);
-        init();
-    }
-).catch(
-    function (values) {
-        println(values);
-    }
-);
+if (require.main === module) {
+    validateInputArgs();
+    dictionaryProm = readFilePromise(process.argv[2]);
+    patternInProm = readFilePromise(process.argv[3]);
+
+    //When filereading promises are fullfilled, start computations
+    Promise.all([dictionaryProm, patternInProm]).then(
+        function (values) {
+            dictionary = makeFile(values[0]);
+            patterns = makeFile(values[1]);
+            init();
+        }
+    ).catch(
+        function (err) {
+            println("Error reading input files: " + (err && err.message ? err.message : err));
+            process.exit(1);
+        }
+    );
+}
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = { makeFile };
+}
 
