@@ -379,6 +379,8 @@ class OrthosEngine:
         self.trieq_l = np.zeros(50, dtype=np.int64)
         self.trieq_r = np.zeros(50, dtype=np.int64)
         self.qmax = 0
+        # qmax_thresh controls first-fit trie density (0: sparse/end-search, 5/7: balanced default).
+        # When qmax > qmax_thresh, first_fit searches from trie_max + 1 instead of 0.
         self.qmax_thresh = 5
         self.trie_max = 0
         self.trie_bmax = 0
