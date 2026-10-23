@@ -100,6 +100,10 @@
 
 const fs = require("fs");
 const readline = require("readline");
+
+/**
+ * Array holding pre-read non-interactive stdin lines when stdin is piped or redirected
+ */
 let stdinInputLines = null;
 
 function makeFile(content) {
@@ -489,7 +493,7 @@ let dot_len;
 let max_pat;
 
 /**
- * Some helper functions
+ * Node child_process module and spawned logger process for background logging
  */
 const cp = require("child_process");
 const logger = cp.fork(require("path").resolve(__dirname, "logger.js"));
@@ -904,12 +908,16 @@ function insertc_pat(fpos) {
     return b;
 }
 
-//block 51
+/**
+ * Temporary in-memory file proxy for writing hyphenated dictionary output
+ */
 const pattmp = makeFile("");
 
 //block 52
 /**
- * Line buffer array and pointer for current line input
+ * Line buffer array and pointer for current line input:
+ * buf: character array of current line
+ * buf_ptr: pointer index within buf
  */
 let buf = [];
 let buf_ptr;
