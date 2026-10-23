@@ -4,6 +4,7 @@
  */
 
 const { spawn } = require("child_process");
+const { makeFile } = require("../orthos.js");
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
@@ -167,6 +168,46 @@ async function main() {
             child.on("close", (code) => resolve({ code }));
         });
         assert.strictEqual(code, 1, "Missing input file should exit with code 1");
+    });
+
+    await test("makeFile handles input validation and default empty string", () => {
+        const file1 = makeFile();
+        assert.strictEqual(file1.data[1], "");
+        const file2 = makeFile(null);
+        assert.strictEqual(file2.data[1], "");
+        assert.throws(() => makeFile(123), TypeError);
+        assert.throws(() => makeFile({}), TypeError);
+    });
+
+    await test("makeFile read throws RangeError on EOF", () => {
+        const file = makeFile("a");
+        assert.strictEqual(file.eof(), false);
+        assert.strictEqual(file.read(), "a");
+        assert.strictEqual(file.eof(), true);
+        assert.throws(() => file.read(), RangeError);
+    });
+
+    await test("makeFile write validates string inputs and appends content", () => {
+        const file = makeFile("hello");
+        file.write(" world");
+        assert.strictEqual(file.data[1], "hello world");
+        file.write(123);
+        assert.strictEqual(file.data[1], "hello world123");
+        assert.throws(() => file.write(null), TypeError);
+        assert.throws(() => file.write(undefined), TypeError);
+    });
+
+    await test("makeFile reset restores position to 0", () => {
+        const file = makeFile("xy");
+        assert.strictEqual(file.read(), "x");
+        file.reset();
+        assert.strictEqual(file.read(), "x");
+    });
+
+    await test("makeFile save rejects invalid path", async () => {
+        const file = makeFile("content");
+        await assert.rejects(() => file.save(""), TypeError);
+        await assert.rejects(() => file.save(123), TypeError);
     });
 
     teardown();
