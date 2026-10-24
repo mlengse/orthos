@@ -5,6 +5,7 @@
 
 const { spawn } = require("child_process");
 const { makeFile } = require("../orthos.js");
+const { runAllTests: runLoggerTests } = require("./test_logger.js");
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
@@ -90,6 +91,9 @@ async function test(name, fn) {
 }
 
 async function main() {
+    await runLoggerTests();
+    console.log("\n--------------------------------------------------\n");
+
     setup();
 
     console.log("Running orthos.js tests...\n");
