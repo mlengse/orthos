@@ -185,8 +185,6 @@ if GPU_AVAILABLE:
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    # out_idx = idx * MAX_LEN + dpos (REMOVED: Use coalesced indexing [idx, dpos, k])
-
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
@@ -293,8 +291,6 @@ def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
 
                 if is_good or is_bad:
                     spos = dpos - pat_dot
-                    # out_idx = idx * MAX_LEN + dpos (REMOVED)
-
                     # Check bounds
                     if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
                         for k in range(pat_len):
@@ -337,8 +333,6 @@ class OrthosEngine:
         self.ops_val = np.zeros(self.max_ops + 1, dtype=np.uint8)
         self.ops_dot = np.zeros(self.max_ops + 1, dtype=np.uint8)
         self.ops_op = np.zeros(self.max_ops + 1, dtype=np.uint32)
-        # self.ops = [{'val':0, 'dot':0, 'op':0} for _ in range(self.max_ops + 1)] # 1-based (REMOVED)
-
         # Trie packing structures
         self.trieq_c = np.zeros(50, dtype=np.int64)
         self.trieq_l = np.zeros(50, dtype=np.int64)
