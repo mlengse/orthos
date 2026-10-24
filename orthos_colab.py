@@ -12,41 +12,7 @@ import sys
 import os
 import time
 import argparse
-import subprocess
 import re
-
-# ==========================================
-# AUTO-INSTALL DEPENDENCIES (COLAB)
-# ==========================================
-def install_dependencies():
-    """Installs necessary packages if running in Colab or missing."""
-    packages = ["cupy-cuda12x", "numba", "numpy"]
-
-    # Check if we are in Colab
-    in_colab = "google.colab" in sys.modules
-
-    if in_colab:
-        print("⚡ Google Colab detected. checking dependencies...")
-        try:
-            import cupy
-            import numba
-            import numpy
-            print("   Dependencies already installed.")
-        except ImportError:
-            print("   Installing CuPy, Numba, and NumPy...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install"] + packages)
-            print("   Installation complete.")
-    else:
-        # Local environment check
-        try:
-            import cupy
-            import numba
-            import numpy
-        except ImportError:
-            print("⚠️  Warning: CuPy or Numba not found. GPU acceleration will not work.")
-            print("   Please install them: pip install numpy numba cupy-cuda12x")
-
-install_dependencies()
 
 # ==========================================
 # IMPORTS
