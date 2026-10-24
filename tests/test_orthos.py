@@ -500,3 +500,14 @@ class TestEndToEnd:
         content = out.read_text(encoding="utf-8")
         assert "\\patterns{" in content
         assert len(content) > 20  # at least some pattern data
+
+
+# ============================================================
+# Security tests: Dependency auto-installation verification
+# ============================================================
+
+class TestSecurityDependencies:
+    def test_install_dependencies_not_present(self):
+        """Verify install_dependencies function was removed to prevent runtime command execution."""
+        import orthos_colab
+        assert not hasattr(orthos_colab, 'install_dependencies')
