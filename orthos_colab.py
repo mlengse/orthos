@@ -10,7 +10,6 @@ Usage:
 
 import sys
 import os
-import time
 import argparse
 import re
 
