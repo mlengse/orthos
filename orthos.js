@@ -1670,7 +1670,6 @@ function getNumericInput(config) {
     });
 }
 
-//const profiler = require("v8-profiler");
 function getGBT(currLevel) {
     getNumericInput({
         prompt: "good weight, bad weight, threshold: ",
@@ -1681,7 +1680,6 @@ function getGBT(currLevel) {
             good_wt = n1;
             bad_wt = n2;
             thresh = n3;
-            //profiler.startProfiling("generateLevel", true);
             generateLevel();
             return doLevels(currLevel + 1);
         }
