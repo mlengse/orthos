@@ -1602,128 +1602,102 @@ function doLevels(currLevel) {
     }
 }
 
-//const profiler = require("v8-profiler");
-function getGBT(currLevel) {
-    if (stdinInputLines) {
-        let n1 = undefined, n2 = undefined, n3 = undefined;
-        while (stdinInputLines.length > 0) {
-            const chunks = stdinInputLines.shift().trim().split(" ");
-            if (chunks.length >= 3) {
-                n1 = parseInt(chunks[0], 10);
-                n2 = parseInt(chunks[1], 10);
-                n3 = parseInt(chunks[2], 10);
-            } else if (chunks.length === 1) {
-                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
-                else if (n2 === undefined) { n2 = parseInt(chunks[0], 10); continue; }
-                else { n3 = parseInt(chunks[0], 10); }
-            } else { continue; }
-            if (n1 >= 1 && n2 >= 1 && n3 >= 1) {
-                good_wt = n1; bad_wt = n2; thresh = n3;
-                generateLevel();
-                return doLevels(currLevel + 1);
-            }
-            n1 = undefined; n2 = undefined; n3 = undefined;
+/**
+ * Helper to parse a line into numeric chunks.
+ * Updates current accumulated numbers according to token count.
+ */
+function parseNumericChunk(line, currentNums, count) {
+    const chunks = line.trim().split(" ");
+    if (chunks.length >= count) {
+        const nums = [];
+        for (let i = 0; i < count; i++) {
+            nums.push(parseInt(chunks[i], 10));
         }
-        println("Specify good weight, bad weight, threshold>=1 !");
+        return nums;
+    } else if (chunks.length === 1) {
+        const nums = currentNums.slice();
+        nums.push(parseInt(chunks[0], 10));
+        return nums;
+    }
+    return currentNums;
+}
+
+/**
+ * Shared utility function for interactive and non-interactive numeric input parsing.
+ */
+function getNumericInput(config) {
+    const { prompt, count, validate, onSuccess, errorMsg } = config;
+
+    if (stdinInputLines) {
+        let nums = [];
+        while (stdinInputLines.length > 0) {
+            const line = stdinInputLines.shift();
+            nums = parseNumericChunk(line, nums, count);
+            if (nums.length >= count) {
+                const targetNums = nums.slice(0, count);
+                if (validate(...targetNums)) {
+                    return onSuccess(...targetNums);
+                }
+                nums = [];
+            }
+        }
+        println(errorMsg);
         process.exit(1);
     }
-    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
-    let n1;
-    let n2;
-    let n3;
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let nums = [];
     let responded = false;
-    rl.setPrompt("good weight, bad weight, threshold: ");
+    rl.setPrompt(prompt);
     rl.prompt();
 
     rl.on("line", function (line) {
         if (responded) { return; }
-        const chunks = line.trim().split(" ");
-        if (chunks.length >= 3) {
-            n1 = parseInt(chunks[0], 10);
-            n2 = parseInt(chunks[1], 10);
-            n3 = parseInt(chunks[2], 10);
-        } else if (chunks.length === 1) {
-            if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10); return;
-            } else if (n2 === undefined) {
-                n2 = parseInt(chunks[0], 10); return;
+        nums = parseNumericChunk(line, nums, count);
+        if (nums.length >= count) {
+            const targetNums = nums.slice(0, count);
+            if (validate(...targetNums)) {
+                responded = true;
+                rl.close();
+                onSuccess(...targetNums);
             } else {
-                n3 = parseInt(chunks[0], 10);
+                println(errorMsg);
+                nums = [];
+                rl.setPrompt(prompt);
+                rl.prompt();
             }
-        } else { return; }
-        if (n1 >= 1 && n2 >= 1 && n3 >= 1) {
-            responded = true;
+        }
+    });
+}
+
+//const profiler = require("v8-profiler");
+function getGBT(currLevel) {
+    getNumericInput({
+        prompt: "good weight, bad weight, threshold: ",
+        errorMsg: "Specify good weight, bad weight, threshold>=1 !",
+        count: 3,
+        validate: (n1, n2, n3) => n1 >= 1 && n2 >= 1 && n3 >= 1,
+        onSuccess: (n1, n2, n3) => {
             good_wt = n1;
             bad_wt = n2;
             thresh = n3;
-            rl.close();
             //profiler.startProfiling("generateLevel", true);
             generateLevel();
-            doLevels(currLevel + 1);
-        } else {
-            println("Specify good weight, bad weight, threshold>=1 !");
-            n1 = undefined;
-            n2 = undefined;
-            n3 = undefined;
-            rl.setPrompt("good weight, bad weight, threshold: ");
-            rl.prompt();
+            return doLevels(currLevel + 1);
         }
     });
 }
 
 function getPat(currLevel) {
-    if (stdinInputLines) {
-        let n1 = undefined, n2 = undefined;
-        while (stdinInputLines.length > 0) {
-            const chunks = stdinInputLines.shift().trim().split(" ");
-            if (chunks.length >= 2) {
-                n1 = parseInt(chunks[0], 10);
-                n2 = parseInt(chunks[1], 10);
-            } else if (chunks.length === 1) {
-                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
-                else { n2 = parseInt(chunks[0], 10); }
-            } else { continue; }
-            if (n1 >= 1 && n1 <= n2 && n2 <= max_dot) {
-                pat_start = n1; pat_finish = n2;
-                return getGBT(currLevel);
-            }
-            n1 = undefined; n2 = undefined;
-        }
-        println("Specify 1<=pat_start<=pat_finish<=" + max_dot + " !");
-        process.exit(1);
-    }
-    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
-    let n1;
-    let n2;
-    let responded = false;
-    rl.setPrompt("pat_start, pat_finish: ");
-    rl.prompt();
-
-    rl.on("line", function (line) {
-        if (responded) { return; }
-        const chunks = line.trim().split(" ");
-        if (chunks.length >= 2) {
-            n1 = parseInt(chunks[0], 10);
-            n2 = parseInt(chunks[1], 10);
-        } else if (chunks.length === 1) {
-            if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10); return;
-            } else {
-                n2 = parseInt(chunks[0], 10);
-            }
-        } else { return; }
-        if (n1 >= 1 && n1 <= n2 && n2 <= max_dot) {
-            responded = true;
+    getNumericInput({
+        prompt: "pat_start, pat_finish: ",
+        errorMsg: "Specify 1<=pat_start<=pat_finish<=" + max_dot + " !",
+        count: 2,
+        validate: (n1, n2) => n1 >= 1 && n1 <= n2 && n2 <= max_dot,
+        onSuccess: (n1, n2) => {
             pat_start = n1;
             pat_finish = n2;
-            rl.close();
-            getGBT(currLevel);
-        } else {
-            println("Specify 1<=pat_start<=pat_finish<=" + max_dot + " !");
-            n1 = undefined;
-            n2 = undefined;
-            rl.setPrompt("pat_start, pat_finish: ");
-            rl.prompt();
+            return getGBT(currLevel);
         }
     });
 }
@@ -1732,58 +1706,15 @@ function getPat(currLevel) {
 
 
 function getHyph() {
-    if (stdinInputLines) {
-        let n1 = undefined, n2 = undefined;
-        while (stdinInputLines.length > 0) {
-            const chunks = stdinInputLines.shift().trim().split(" ");
-            if (chunks.length >= 2) {
-                n1 = parseInt(chunks[0], 10);
-                n2 = parseInt(chunks[1], 10);
-            } else if (chunks.length === 1) {
-                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
-                else { n2 = parseInt(chunks[0], 10); }
-            } else { continue; }
-            if (n1 >= 1 && n1 < max_val && n2 >= 1 && n2 < max_val) {
-                hyph_start = n1; hyph_finish = n2;
-                return doLevels(hyph_start);
-            }
-            n1 = undefined; n2 = undefined;
-        }
-        println("Specify 1<=hyph_start,hyph_finish<=" + (max_val - 1) + " !");
-        process.exit(1);
-    }
-    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
-    let n1;
-    let n2;
-    let responded = false;
-    rl.setPrompt("hyph_start, hyph_finish: ");
-    rl.prompt();
-
-    rl.on("line", function (line) {
-        if (responded) { return; }
-        const chunks = line.trim().split(" ");
-        if (chunks.length >= 2) {
-            n1 = parseInt(chunks[0], 10);
-            n2 = parseInt(chunks[1], 10);
-        } else if (chunks.length === 1) {
-            if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10); return;
-            } else {
-                n2 = parseInt(chunks[0], 10);
-            }
-        } else { return; }
-        if (n1 >= 1 && n1 < max_val && n2 >= 1 && n2 < max_val) {
-            responded = true;
+    getNumericInput({
+        prompt: "hyph_start, hyph_finish: ",
+        errorMsg: "Specify 1<=hyph_start,hyph_finish<=" + (max_val - 1) + " !",
+        count: 2,
+        validate: (n1, n2) => n1 >= 1 && n1 < max_val && n2 >= 1 && n2 < max_val,
+        onSuccess: (n1, n2) => {
             hyph_start = n1;
             hyph_finish = n2;
-            rl.close();
-            doLevels(hyph_start);
-        } else {
-            println("Specify 1<=hyph_start,hyph_finish<=" + (max_val - 1) + " !");
-            n1 = undefined;
-            n2 = undefined;
-            rl.setPrompt("hyph_start, hyph_finish: ");
-            rl.prompt();
+            return doLevels(hyph_start);
         }
     });
 }
@@ -1845,58 +1776,15 @@ function main() {
 }
 
 function getLeftRightHyphenMin() {
-    if (stdinInputLines) {
-        let n1 = undefined, n2 = undefined;
-        while (stdinInputLines.length > 0) {
-            const chunks = stdinInputLines.shift().trim().split(" ");
-            if (chunks.length >= 2) {
-                n1 = parseInt(chunks[0], 10);
-                n2 = parseInt(chunks[1], 10);
-            } else if (chunks.length === 1) {
-                if (n1 === undefined) { n1 = parseInt(chunks[0], 10); continue; }
-                else { n2 = parseInt(chunks[0], 10); }
-            } else { continue; }
-            if (n1 >= 1 && n1 < 15 && n2 >= 1 && n2 < 15) {
-                left_hyphen_min = n1; right_hyphen_min = n2;
-                return main();
-            }
-            n1 = undefined; n2 = undefined;
-        }
-        println("Specify 1<=left_hyphen_min,right_hyphen_min<=15 !");
-        process.exit(1);
-    }
-    const rl = readline.createInterface({input: process.stdin, output: process.stdout});
-    let n1;
-    let n2;
-    let responded = false;
-    rl.setPrompt("left_hyphen_min, right_hyphen_min: ");
-    rl.prompt();
-
-    rl.on("line", function (line) {
-        if (responded) { return; }
-        const chunks = line.trim().split(" ");
-        if (chunks.length >= 2) {
-            n1 = parseInt(chunks[0], 10);
-            n2 = parseInt(chunks[1], 10);
-        } else if (chunks.length === 1) {
-            if (n1 === undefined) {
-                n1 = parseInt(chunks[0], 10); return;
-            } else {
-                n2 = parseInt(chunks[0], 10);
-            }
-        } else { return; }
-        if (n1 >= 1 && n1 < 15 && n2 >= 1 && n2 < 15) {
-            responded = true;
+    getNumericInput({
+        prompt: "left_hyphen_min, right_hyphen_min: ",
+        errorMsg: "Specify 1<=left_hyphen_min,right_hyphen_min<=15 !",
+        count: 2,
+        validate: (n1, n2) => n1 >= 1 && n1 < 15 && n2 >= 1 && n2 < 15,
+        onSuccess: (n1, n2) => {
             left_hyphen_min = n1;
             right_hyphen_min = n2;
-            rl.close();
-            main();
-        } else {
-            println("Specify 1<=left_hyphen_min,right_hyphen_min<=15 !");
-            n1 = undefined;
-            n2 = undefined;
-            rl.setPrompt("left_hyphen_min, right_hyphen_min: ");
-            rl.prompt();
+            return main();
         }
     });
 }

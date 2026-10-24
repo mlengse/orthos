@@ -166,6 +166,15 @@ async function main() {
         assert.strictEqual(code, 1, "No-args should exit with code 1");
     });
 
+    await test("Handles multi-line integer inputs", async () => {
+        const dictFile = writeTmp("test_multiline.dic", "ka-ta\n");
+        const patIn = writeTmp("in_multiline.pat", "");
+        const patOut = writeTmp("out_multiline.pat", "");
+        const multilineInputs = ["1", "1", "1", "1", "1", "1", "1", "1", "1", "n", "n"];
+        const { stdout } = await runOrthos(dictFile, patIn, patOut, multilineInputs);
+        assert.ok(stdout.includes("This is orthos.js"), "Should complete execution with multi-line inputs");
+    });
+
     await test("Bad dictionary file exits with code 1", async () => {
         const child = spawn("node", [ORTHOS, "/nonexistent/file.dic", "/nonexistent/pat.pat", "out.pat"], { stdio: ["pipe", "pipe", "pipe"] });
         const { code } = await new Promise((resolve) => {
