@@ -1733,31 +1733,29 @@ function collectAndSetChars() {
         }
         dictionary.data[0] += 1;
     }
-    charsA = [];
-    charsS.forEach(function (v) { charsA.push(v); });
-    charsA.sort((a, b) => a - b);
-    charsA.forEach(function setChar(cc) {
-        const c = String.fromCharCode(cc);
+    charsA = Array.from(charsS).sort((a, b) => a - b);
+    for (let idx = 0; idx < charsA.length; idx++) {
+        const cc = charsA[idx];
         let i = xint[cc];
         if (i === undefined) {
-            if (c === c.toUpperCase()) {
-                //c is upperCase -> try lowerCase
-                i = xint[c.toLowerCase().charCodeAt(0)];
-            } else if (c.toUpperCase().length === 1) { //test for length is necessary because "ß".toUpperCase() -> "SS"
-                //c ist lowerCase -> try upperCase
-                i = xint[c.toUpperCase().charCodeAt(0)];
+            const c = String.fromCharCode(cc);
+            const upper = c.toUpperCase();
+            if (c === upper) {
+                // c is upperCase -> try lowerCase
+                const lower = c.toLowerCase();
+                i = xint[lower.charCodeAt(0)];
+            } else if (upper.length === 1) { // test for length is necessary because "ß".toUpperCase() -> "SS"
+                // c is lowerCase -> try upperCase
+                i = xint[upper.charCodeAt(0)];
             }
             if (i === undefined) {
-                i = xext.push(c.toLowerCase()) - 1;
-                xint[cc] = i;
-                xclass[cc] = letter_class;
-            } else {
-                //other case already exists:
-                xint[cc] = i;
-                xclass[cc] = letter_class;
+                const lower = c.toLowerCase();
+                i = xext.push(lower) - 1;
             }
+            xint[cc] = i;
+            xclass[cc] = letter_class;
         }
-    });
+    }
     xdig = xext.slice(0, 10);
     cmax = xext.length - 1;
     cnum = xext.length;
