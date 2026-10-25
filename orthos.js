@@ -943,15 +943,15 @@ const pattmp = makeFile("");
 //block 52
 /**
  * Line buffer array and pointer for current line input:
- * buf: character array of current line
+ * buf: line string buffer
  * buf_ptr: pointer index within buf
  */
-let buf = [];
+let buf = "";
 let buf_ptr;
 
 //block 53
 function print_buf() {
-    println(buf.join(""));
+    println(buf);
 }
 
 function bad_input(msg) {
@@ -963,10 +963,10 @@ function bad_input(msg) {
 function read_buf(file) {
     const nl = file.data[1].indexOf("\n", file.data[0]);
     if (nl === -1) {
-        buf = file.data[1].slice(file.data[0]).split("");
+        buf = file.data[1].slice(file.data[0]);
         file.data[0] = file.data[1].length;
     } else {
-        buf = file.data[1].slice(file.data[0], nl).split("");
+        buf = file.data[1].slice(file.data[0], nl);
         file.data[0] = nl + 1;
     }
     buf_len = buf.length;
@@ -1451,7 +1451,7 @@ function read_patterns() {
         buf_ptr = 0;
         hval[0] = 0;
         while (buf_ptr < buf_len) {
-            cc = buf[buf_ptr].charCodeAt(0);
+            cc = buf.charCodeAt(buf_ptr);
             switch (xclass[cc]) {
             case digit_class:
                 d = xint[cc];
