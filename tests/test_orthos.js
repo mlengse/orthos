@@ -4,7 +4,7 @@
  */
 
 const { spawn } = require("child_process");
-const { makeFile } = require("../orthos.js");
+const { makeFile, readFilePromise } = require("../orthos.js");
 const { runAllTests: runLoggerTests } = require("./test_logger.js");
 const fs = require("fs");
 const path = require("path");
@@ -221,6 +221,36 @@ async function main() {
         const file = makeFile("content");
         await assert.rejects(() => file.save(""), TypeError);
         await assert.rejects(() => file.save(123), TypeError);
+    });
+
+
+    await test("readFilePromise resolves with file contents for valid file", async () => {
+        const filePath = writeTmp("promise_test.txt", "hello world content");
+        const content = await readFilePromise(filePath);
+        assert.strictEqual(content, "hello world content", "Should resolve with file string content");
+    });
+
+    await test("readFilePromise rejects when file does not exist", async () => {
+        const nonExistentPath = path.join(TMP, "non_existent_file_12345.txt");
+        await assert.rejects(
+            () => readFilePromise(nonExistentPath),
+            (err) => {
+                assert.ok(err, "Should reject with an error");
+                assert.strictEqual(err.code, "ENOENT", "Error code should be ENOENT");
+                return true;
+            }
+        );
+    });
+
+    await test("readFilePromise rejects when reading a directory as file", async () => {
+        await assert.rejects(
+            () => readFilePromise(TMP),
+            (err) => {
+                assert.ok(err, "Should reject when reading a directory");
+                assert.strictEqual(err.code, "EISDIR", "Error code should be EISDIR");
+                return true;
+            }
+        );
     });
 
     teardown();
