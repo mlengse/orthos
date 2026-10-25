@@ -1825,6 +1825,6 @@ if (require.main === module) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { makeFile };
+    module.exports = { makeFile, readFilePromise };
 }
 
