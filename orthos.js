@@ -105,6 +105,7 @@ const readline = require("readline");
  * Array holding pre-read non-interactive stdin lines when stdin is piped or redirected
  */
 let stdinInputLines = null;
+let stdinInputIndex = 0;
 
 function makeFile(content) {
     if (content === undefined || content === null) {
@@ -1543,7 +1544,7 @@ function generateLevel() {
 
 function askDoDictionary() {
     if (stdinInputLines) {
-        const chunk = (stdinInputLines.shift() || "n").trim();
+        const chunk = ((stdinInputIndex < stdinInputLines.length ? stdinInputLines[stdinInputIndex++] : null) || "n").trim();
         if (chunk === "y" || chunk === "Y") {
             do_dictionary();
             logger.send("SIGHUP");
@@ -1628,8 +1629,8 @@ function getNumericInput(config) {
 
     if (stdinInputLines) {
         let nums = [];
-        while (stdinInputLines.length > 0) {
-            const line = stdinInputLines.shift();
+        while (stdinInputIndex < stdinInputLines.length) {
+            const line = stdinInputLines[stdinInputIndex++];
             nums = parseNumericChunk(line, nums, count);
             if (nums.length >= count) {
                 const targetNums = nums.slice(0, count);
@@ -1791,6 +1792,7 @@ function init() {
     if (!process.stdin.isTTY) {
         const rl = readline.createInterface({input: process.stdin});
         stdinInputLines = [];
+        stdinInputIndex = 0;
         rl.on("line", function (line) {
             stdinInputLines.push(line);
         });
