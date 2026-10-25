@@ -775,22 +775,22 @@ class OrthosEngine:
                         pass
         print(f"   Loaded {count} pattern points.")
 
+    def _clean_ops(self, h):
+        if h == 0:
+            return 0
+        next_head = self._clean_ops(int(self.ops_op[h]))
+        val = self.ops_val[h]
+        if val != MAX_VAL and val > 0:
+            return self.new_trie_op(val, self.ops_dot[h], next_head)
+        return next_head
+
     def delete_patterns(self, s):
         c = self.cmin
         all_freed = True
         while c <= self.cmax:
             t = s + c
             if self.trie_c[t] == c:
-                ops_list = []
-                h = int(self.trie_r[t])
-                while h > 0:
-                    ops_list.append((self.ops_val[h], self.ops_dot[h], self.ops_op[h]))
-                    h = self.ops_op[h]
-                new_head = 0
-                for val, dot, _ in reversed(ops_list):
-                    if val != MAX_VAL and val > 0:
-                        new_head = self.new_trie_op(val, dot, new_head)
-                self.trie_r[t] = new_head
+                self.trie_r[t] = self._clean_ops(int(self.trie_r[t]))
                 if self.trie_l[t] > 0:
                     self.trie_l[t] = self.delete_patterns(self.trie_l[t])
                 if self.trie_l[t] > 0 or self.trie_r[t] > 0 or s == self.trie_root:
