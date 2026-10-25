@@ -591,14 +591,13 @@ function first_fit() {
     let t;
     let q;
     let doSearchLoop = true;
-    let continueLoop = false;
     //block 36
     t = (qmax > qmax_thresh)
         ? trie_r[trie_max + 1]
         : 0;
 
     while (doSearchLoop) {
-        continueLoop = false;
+        let continueLoop = false;
         t = trie_l[t];
         s = t - trieq_c[1];
         //block 37
@@ -797,7 +796,6 @@ function firstc_fit() {
     let b;
     let q;
     let doSearchLoop = true;
-    let continueLoop = false;
     //begin block 46
     if (qmax > 3) {
         a = triec_r[triec_max + 1];
@@ -805,7 +803,7 @@ function firstc_fit() {
         a = 0;
     }
     while (doSearchLoop) {
-        continueLoop = false;
+        let continueLoop = false;
         a = triec_l[a];
         b = a - trieq_c[1];
         //begin block 47
