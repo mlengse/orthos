@@ -1361,8 +1361,10 @@ function do_word() {
     }
 }
 
-//block 88
-function do_dictionary() {
+/**
+ * Setup dictionary pass parameters and count trie initialization
+ */
+function setup_dictionary_pass() {
     good_count = 0;
     bad_count = 0;
     miss_count = 0;
@@ -1397,6 +1399,12 @@ function do_dictionary() {
         filnam = "pattmp." + (hyph_level + 1);
         println("writing " + filnam);
     }
+}
+
+/**
+ * Process words in the dictionary file
+ */
+function process_dictionary_words() {
     //begin block 89
     dictionary.reset();
     while (!dictionary.eof()) {
@@ -1417,6 +1425,12 @@ function do_dictionary() {
         }
     }
     //end block 89
+}
+
+/**
+ * Output statistics and save temporary hyphenated output file if requested
+ */
+function print_dictionary_stats() {
     println(" ");
     println(Number(good_count).toString() + " good, " + Number(bad_count).toString() + " bad, " + Number(miss_count).toString() + " missed");
     if ((good_count + miss_count) > 0) {
@@ -1432,6 +1446,13 @@ function do_dictionary() {
             }
         );
     }
+}
+
+//block 88
+function do_dictionary() {
+    setup_dictionary_pass();
+    process_dictionary_words();
+    print_dictionary_stats();
 }
 
 
