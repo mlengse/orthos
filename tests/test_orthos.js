@@ -4,7 +4,7 @@
  */
 
 const { spawn } = require("child_process");
-const { makeFile, readFilePromise } = require("../orthos.js");
+const { makeFile, readFilePromise, validateInputArgs } = require("../orthos.js");
 const { runAllTests: runLoggerTests } = require("./test_logger.js");
 const fs = require("fs");
 const path = require("path");
@@ -251,6 +251,106 @@ async function main() {
                 return true;
             }
         );
+    });
+
+
+    function testValidateInputArgs(options) {
+        const origArgv = process.argv;
+        const origExistsSync = fs.existsSync;
+        const origStatSync = fs.statSync;
+        const origExit = process.exit;
+        const origStdoutWrite = process.stdout.write;
+
+        let exitCode = null;
+        let output = "";
+
+        try {
+            if (options.argv) {
+                process.argv = options.argv;
+            }
+            if (options.existsSync) {
+                fs.existsSync = options.existsSync;
+            }
+            if (options.statSync) {
+                fs.statSync = options.statSync;
+            }
+            process.exit = (code) => {
+                exitCode = code;
+                throw new Error("PROCESS_EXIT_" + code);
+            };
+            process.stdout.write = (str) => {
+                output += str;
+                return true;
+            };
+
+            try {
+                validateInputArgs();
+            } catch (e) {
+                if (!e.message.startsWith("PROCESS_EXIT_")) {
+                    throw e;
+                }
+            }
+
+            if (options.expectedExitCode !== undefined) {
+                assert.strictEqual(exitCode, options.expectedExitCode, "Expected exit code " + options.expectedExitCode + ", got " + exitCode);
+            } else {
+                assert.strictEqual(exitCode, null, "Expected no process.exit, but exited with " + exitCode);
+            }
+            if (options.expectedOutputSubstring) {
+                assert.ok(output.includes(options.expectedOutputSubstring), "Expected output to include \"" + options.expectedOutputSubstring + "\", got \"" + output + "\"");
+            }
+        } finally {
+            process.argv = origArgv;
+            fs.existsSync = origExistsSync;
+            fs.statSync = origStatSync;
+            process.exit = origExit;
+            process.stdout.write = origStdoutWrite;
+        }
+    }
+
+    await test("validateInputArgs exits with error when process.argv has fewer than 4 arguments", () => {
+        testValidateInputArgs({
+            argv: ["node", "orthos.js", "dict.dic"],
+            expectedExitCode: 1,
+            expectedOutputSubstring: "Usage: node orthos.js <dictionary> <pattern-in> <pattern-out>"
+        });
+    });
+
+    await test("validateInputArgs exits with error when dictionary file does not exist", () => {
+        testValidateInputArgs({
+            argv: ["node", "orthos.js", "missing.dic", "in.pat", "out.pat"],
+            existsSync: () => false,
+            expectedExitCode: 1,
+            expectedOutputSubstring: "Error: Dictionary file not found: missing.dic"
+        });
+    });
+
+    await test("validateInputArgs exits with error when dictionary path is not a file", () => {
+        testValidateInputArgs({
+            argv: ["node", "orthos.js", "some_dir", "in.pat", "out.pat"],
+            existsSync: () => true,
+            statSync: () => ({ isFile: () => false, size: 1024 }),
+            expectedExitCode: 1,
+            expectedOutputSubstring: "Error: Dictionary path is not a file: some_dir"
+        });
+    });
+
+    await test("validateInputArgs exits with error when dictionary file exceeds 50 MB", () => {
+        testValidateInputArgs({
+            argv: ["node", "orthos.js", "huge.dic", "in.pat", "out.pat"],
+            existsSync: () => true,
+            statSync: () => ({ isFile: () => true, size: 50 * 1024 * 1024 + 1 }),
+            expectedExitCode: 1,
+            expectedOutputSubstring: "Error: Dictionary file exceeds 50 MB size limit: huge.dic"
+        });
+    });
+
+    await test("validateInputArgs succeeds when dictionary file is valid and <= 50 MB", () => {
+        testValidateInputArgs({
+            argv: ["node", "orthos.js", "valid.dic", "in.pat", "out.pat"],
+            existsSync: () => true,
+            statSync: () => ({ isFile: () => true, size: 10 * 1024 * 1024 })
+        });
     });
 
     teardown();
