@@ -741,15 +741,12 @@ class OrthosEngine:
             values = {}
             letter_pos = 0
 
-            i = 0
-            while i < len(token):
-                c = token[i]
+            for c in token:
                 if c.isdigit():
                     values[letter_pos] = int(c)
                 else:
                     letters.append(c)
                     letter_pos += 1
-                i += 1
 
             if not letters: continue
             if len(letters) >= MAX_LEN: continue
