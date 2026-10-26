@@ -62,6 +62,107 @@ FOUND_HYF = 13  # '*'
 
 
 # ==========================================
+# SHARED WORD PROCESSING HELPERS
+# ==========================================
+@jit(nopython=True)
+def _process_word_hyphenate(idx, words, wlen, trie_c, trie_l, trie_r, ops_val, ops_dot, ops_op, trie_root, hvals_row, no_more_row, pat_len, pat_dot, hyph_level, max_val):
+    # Iterate backwards through the word
+    for spos in range(wlen - 1, -1, -1):
+        fpos = spos + 1
+        if fpos >= MAX_LEN: continue
+        if fpos >= wlen: continue
+
+        char_code = words[idx, fpos]
+        t = int32(trie_root) + int32(char_code)
+
+        # Traverse Trie
+        while True:
+            # Bound check for t
+            if t >= trie_c.shape[0]: break
+
+            if trie_c[t] == char_code:
+                h = trie_r[t]
+                while h > 0:
+                    op_val = ops_val[h]
+                    op_dot = ops_dot[h]
+                    op_next = ops_op[h]
+
+                    dpos = spos + op_dot
+
+                    if dpos < MAX_LEN:
+                        # Update hvals
+                        if op_val < max_val:
+                            if hvals_row[dpos] < op_val:
+                                hvals_row[dpos] = op_val
+
+                        # Update no_more
+                        if op_val >= hyph_level:
+                            cond1 = (fpos - pat_len) <= (dpos - pat_dot)
+                            cond2 = (dpos - pat_dot) <= spos
+                            if cond1 and cond2:
+                                no_more_row[dpos] = 1
+
+                    h = op_next
+
+                t = int32(trie_l[t])
+                if t == 0:
+                    break
+
+                fpos += 1
+                if fpos >= wlen:
+                    break
+                char_code = words[idx, fpos]
+                t = int32(t) + int32(char_code)
+            else:
+                break
+
+
+@jit(nopython=True)
+def _process_word_update_dots(idx, dots, hvals, word_lens, hyf_min, hyf_max):
+    wlen = word_lens[idx]
+    dpos = wlen - hyf_max
+
+    while dpos >= hyf_min:
+        # If hval is odd, it means we found a hyphen here
+        if (hvals[idx, dpos] % 2) == 1:
+            dots[idx, dpos] += 1
+        dpos -= 1
+
+
+@jit(nopython=True)
+def _process_word_extract_candidates(idx, words, word_lens, dots, dotw, no_more,
+                                      pat_len, pat_dot, good_dot, bad_dot,
+                                      dot_min, dot_max,
+                                      out_patterns, out_weights, out_mask):
+    wlen = word_lens[idx]
+
+    # dpos loop: wlen - dot_max down to dot_min
+    for dpos in range(wlen - dot_max, dot_min - 1, -1):
+        if no_more[idx, dpos] == 0:
+            current_dot = dots[idx, dpos]
+            is_good = (current_dot == good_dot)
+            is_bad = (current_dot == bad_dot)
+
+            if is_good or is_bad:
+                spos = dpos - pat_dot
+                # Check bounds
+                if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
+                    for k in range(pat_len):
+                        out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
+
+                    weight = dotw[idx, dpos]
+
+                    if is_good:
+                        out_weights[idx, dpos, 0] = weight
+                        out_weights[idx, dpos, 1] = 0.0
+                    else:
+                        out_weights[idx, dpos, 0] = 0.0
+                        out_weights[idx, dpos, 1] = float(weight)
+
+                    out_mask[idx, dpos] = 1
+
+
+# ==========================================
 # GPU KERNELS
 # ==========================================
 if GPU_AVAILABLE:
@@ -72,75 +173,18 @@ if GPU_AVAILABLE:
             return
 
         # BOLT OPTIMIZATION: Use Local Memory for accumulation
-        # Buffering hvals/no_more in registers/L1 cache reduces global memory traffic
-        # and allows for coalesced burst writes at the end.
         l_hvals = cuda.local.array(MAX_LEN, uint8)
         l_no_more = cuda.local.array(MAX_LEN, uint8)
 
-        # Initialize local buffers
         for i in range(MAX_LEN):
             l_hvals[i] = 0
             l_no_more[i] = 0
 
         wlen = word_lens[idx]
-
-        # Iterate backwards through the word
-        for spos in range(wlen - 1, -1, -1):
-            fpos = spos + 1
-            if fpos >= MAX_LEN: continue
-            if fpos >= wlen: continue
-
-            char_code = words[idx, fpos]
-            t = int32(trie_root) + int32(char_code)
-
-            # Traverse Trie
-            while True:
-                # Bound check for t
-                if t >= trie_c.shape[0]: break
-
-                if trie_c[t] == char_code:
-                    h = trie_r[t]
-                    while h > 0:
-                        op_val = ops_val[h]
-                        op_dot = ops_dot[h]
-                        op_next = ops_op[h]
-
-                        dpos = spos + op_dot
-
-                        if dpos < MAX_LEN:
-                            # Update hvals
-                            if op_val < max_val:
-                                if l_hvals[dpos] < op_val:
-                                    l_hvals[dpos] = op_val
-
-                            # Update no_more
-                            if op_val >= hyph_level:
-                                cond1 = (fpos - pat_len) <= (dpos - pat_dot)
-                                cond2 = (dpos - pat_dot) <= spos
-                                if cond1 and cond2:
-                                    l_no_more[dpos] = 1
-
-                        h = op_next
-
-                    t = int32(trie_l[t])
-                    if t == 0:
-                        break
-
-                    fpos += 1
-                    if fpos >= wlen:
-                        break
-                    char_code = words[idx, fpos]
-                    t = int32(t) + int32(char_code)
-                else:
-                    break
+        _process_word_hyphenate(idx, words, wlen, trie_c, trie_l, trie_r, ops_val, ops_dot, ops_op, trie_root, l_hvals, l_no_more, pat_len, pat_dot, hyph_level, max_val)
 
         # Flush local buffers to global memory (Coalesced Write)
         for i in range(MAX_LEN):
-            # Only write if non-zero to save bandwidth?
-            # Actually, we need to overwrite the output buffer (which was reset to 0).
-            # Writing 0 is fine.
-            # hvals is (N, MAX_LEN) F-order -> hvals[idx, i] = hvals[idx + i*N]
-            # Adjacent threads (idx, idx+1) write to adjacent addresses. Perfect.
             hvals[idx, i] = l_hvals[i]
             no_more[idx, i] = l_no_more[i]
 
@@ -156,14 +200,7 @@ if GPU_AVAILABLE:
         if idx >= dots.shape[0]:
             return
 
-        wlen = word_lens[idx]
-        dpos = wlen - hyf_max
-
-        while dpos >= hyf_min:
-            # If hval is odd, it means we found a hyphen here
-            if (hvals[idx, dpos] % 2) == 1:
-                dots[idx, dpos] += 1
-            dpos -= 1
+        _process_word_update_dots(idx, dots, hvals, word_lens, hyf_min, hyf_max)
 
     @cuda.jit
     def kernel_extract_candidates(words, word_lens, dots, dotw, no_more,
@@ -174,32 +211,10 @@ if GPU_AVAILABLE:
         if idx >= words.shape[0]:
             return
 
-        wlen = word_lens[idx]
-
-        # dpos loop: wlen - dot_max down to dot_min
-        for dpos in range(wlen - dot_max, dot_min - 1, -1):
-            if no_more[idx, dpos] == 0:
-                current_dot = dots[idx, dpos]
-                is_good = (current_dot == good_dot)
-                is_bad = (current_dot == bad_dot)
-
-                if is_good or is_bad:
-                    spos = dpos - pat_dot
-                    # Check bounds
-                    if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
-                        for k in range(pat_len):
-                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
-
-                        weight = dotw[idx, dpos]
-
-                        if is_good:
-                            out_weights[idx, dpos, 0] = weight
-                            out_weights[idx, dpos, 1] = 0.0
-                        else:
-                            out_weights[idx, dpos, 0] = 0.0
-                            out_weights[idx, dpos, 1] = float(weight)
-
-                        out_mask[idx, dpos] = 1
+        _process_word_extract_candidates(idx, words, word_lens, dots, dotw, no_more,
+                                         pat_len, pat_dot, good_dot, bad_dot,
+                                         dot_min, dot_max,
+                                         out_patterns, out_weights, out_mask)
 
 # ==========================================
 # CPU KERNELS (Numba Optimized)
@@ -209,69 +224,13 @@ def kernel_hyphenate_cpu(words, word_lens, trie_c, trie_l, trie_r, ops_val, ops_
     n_words = words.shape[0]
     for idx in prange(n_words):
         wlen = word_lens[idx]
-
-        # Iterate backwards through the word
-        for spos in range(wlen - 1, -1, -1):
-            fpos = spos + 1
-            if fpos >= MAX_LEN: continue
-            if fpos >= wlen: continue
-
-            char_code = words[idx, fpos]
-            t = int32(trie_root) + int32(char_code)
-
-            # Traverse Trie
-            while True:
-                # Bound check for t
-                if t >= trie_c.shape[0]: break
-
-                if trie_c[t] == char_code:
-                    h = trie_r[t]
-                    while h > 0:
-                        op_val = ops_val[h]
-                        op_dot = ops_dot[h]
-                        op_next = ops_op[h]
-
-                        dpos = spos + op_dot
-
-                        if dpos < MAX_LEN:
-                            # Update hvals
-                            if op_val < max_val:
-                                if hvals[idx, dpos] < op_val:
-                                    hvals[idx, dpos] = op_val
-
-                            # Update no_more
-                            if op_val >= hyph_level:
-                                cond1 = (fpos - pat_len) <= (dpos - pat_dot)
-                                cond2 = (dpos - pat_dot) <= spos
-                                if cond1 and cond2:
-                                    no_more[idx, dpos] = 1
-
-                        h = op_next
-
-                    t = int32(trie_l[t])
-                    if t == 0:
-                        break
-
-                    fpos += 1
-                    if fpos >= wlen:
-                        break
-                    char_code = words[idx, fpos]
-                    t = int32(t) + int32(char_code)
-                else:
-                    break
+        _process_word_hyphenate(idx, words, wlen, trie_c, trie_l, trie_r, ops_val, ops_dot, ops_op, trie_root, hvals[idx], no_more[idx], pat_len, pat_dot, hyph_level, max_val)
 
 @jit(nopython=True, parallel=True)
 def kernel_update_dots_cpu(dots, hvals, dotw, word_lens, hyf_min, hyf_max):
     n_words = dots.shape[0]
     for idx in prange(n_words):
-        wlen = word_lens[idx]
-        dpos = wlen - hyf_max
-
-        while dpos >= hyf_min:
-            # If hval is odd, it means we found a hyphen here
-            if (hvals[idx, dpos] % 2) == 1:
-                dots[idx, dpos] += 1
-            dpos -= 1
+        _process_word_update_dots(idx, dots, hvals, word_lens, hyf_min, hyf_max)
 
 @jit(nopython=True, parallel=True)
 def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
@@ -280,32 +239,10 @@ def kernel_extract_candidates_cpu(words, word_lens, dots, dotw, no_more,
                               out_patterns, out_weights, out_mask):
     n_words = words.shape[0]
     for idx in prange(n_words):
-        wlen = word_lens[idx]
-
-        # dpos loop: wlen - dot_max down to dot_min
-        for dpos in range(wlen - dot_max, dot_min - 1, -1):
-            if no_more[idx, dpos] == 0:
-                current_dot = dots[idx, dpos]
-                is_good = (current_dot == good_dot)
-                is_bad = (current_dot == bad_dot)
-
-                if is_good or is_bad:
-                    spos = dpos - pat_dot
-                    # Check bounds
-                    if spos + 1 >= 0 and spos + 1 + pat_len <= wlen:
-                        for k in range(pat_len):
-                            out_patterns[idx, dpos, k] = words[idx, spos + 1 + k]
-
-                        weight = dotw[idx, dpos]
-
-                        if is_good:
-                            out_weights[idx, dpos, 0] = weight
-                            out_weights[idx, dpos, 1] = 0.0
-                        else:
-                            out_weights[idx, dpos, 0] = 0.0
-                            out_weights[idx, dpos, 1] = float(weight)
-
-                        out_mask[idx, dpos] = 1
+        _process_word_extract_candidates(idx, words, word_lens, dots, dotw, no_more,
+                                         pat_len, pat_dot, good_dot, bad_dot,
+                                         dot_min, dot_max,
+                                         out_patterns, out_weights, out_mask)
 
 # ==========================================
 # ORTHOS ENGINE
