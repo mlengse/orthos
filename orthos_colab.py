@@ -20,7 +20,9 @@ import numpy as np
 
 try:
     from numba import jit, prange, int32, uint32, float32, uint8
+    NUMBA_AVAILABLE = True
 except ImportError:
+    NUMBA_AVAILABLE = False
     print("⚠️  Warning: Numba not found. CPU optimization will be disabled.")
     def jit(*args, **kwargs):
         def decorator(func):
@@ -160,6 +162,27 @@ def _process_word_extract_candidates(idx, words, word_lens, dots, dotw, no_more,
                         out_weights[idx, dpos, 1] = float(weight)
 
                     out_mask[idx, dpos] = 1
+
+
+@jit(nopython=True, fastmath=True)
+def _aggregate_weights_cpu(unique_indices, sorted_weights, num_unique):
+    """
+    Fast Numba JIT aggregation of sorted candidate weights per unique pattern.
+    Replaces slow np.add.at by accumulating weight slices for contiguous runs.
+    """
+    unique_weights = np.zeros((num_unique, 2), dtype=np.float32)
+    n = len(sorted_weights)
+    for i in range(num_unique):
+        start = unique_indices[i]
+        end = unique_indices[i + 1] if i + 1 < num_unique else n
+        s0 = 0.0
+        s1 = 0.0
+        for j in range(start, end):
+            s0 += sorted_weights[j, 0]
+            s1 += sorted_weights[j, 1]
+        unique_weights[i, 0] = s0
+        unique_weights[i, 1] = s1
+    return unique_weights
 
 
 # ==========================================
@@ -951,22 +974,21 @@ class OrthosEngine:
         sorted_patterns = valid_patterns[sorted_indices]
         sorted_weights = valid_weights[sorted_indices]
 
-        # Find boundaries
+        # Find boundaries and unique run indices
         diff = sorted_patterns[1:] != sorted_patterns[:-1]
         boundaries = np.any(diff, axis=1)
 
-        run_ids = np.zeros(len(sorted_patterns), dtype=np.int32)
-        run_ids[1:] = np.cumsum(boundaries)
-
-        num_unique = int(run_ids[-1]) + 1
-        unique_weights = np.zeros((num_unique, 2), dtype=np.float32)
-
-        # Aggregation loop (np.add.at is slow, simple loop might be faster for CPU or stick to np.add.at)
-        np.add.at(unique_weights, run_ids, sorted_weights)
-
         change_points = np.flatnonzero(boundaries) + 1
-        unique_indices = np.concatenate((np.array([0]), change_points))
+        unique_indices = np.concatenate((np.array([0], dtype=np.int32), change_points.astype(np.int32, copy=False)))
+        num_unique = len(unique_indices)
+
         unique_patterns_arr = sorted_patterns[unique_indices]
+
+        # Fast candidate weight aggregation (JIT loop / reduceat replaces slow np.add.at)
+        if NUMBA_AVAILABLE:
+            unique_weights = _aggregate_weights_cpu(unique_indices, sorted_weights, num_unique)
+        else:
+            unique_weights = np.add.reduceat(sorted_weights, unique_indices, axis=0)
 
         good_pat_count = 0
         bad_pat_count = 0
