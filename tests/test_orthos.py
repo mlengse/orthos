@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from orthos_colab import OrthosEngine, MAX_VAL, MAX_LEN, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF
+from orthos_colab import OrthosEngine, MAX_VAL, MAX_LEN, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF, input_gbt
 
 
 @pytest.fixture
@@ -511,3 +511,37 @@ class TestSecurityDependencies:
         """Verify install_dependencies function was removed to prevent runtime command execution."""
         import orthos_colab
         assert not hasattr(orthos_colab, 'install_dependencies')
+
+
+# ============================================================
+# Unit tests for input_gbt helper function
+# ============================================================
+
+class TestInputGbt:
+    """Unit tests for the CLI input helper function input_gbt()."""
+
+    def test_valid_input(self, monkeypatch):
+        """Should correctly parse three space-separated integers."""
+        monkeypatch.setattr("builtins.input", lambda _: "1 2 3")
+        g, b, t = input_gbt()
+        assert (g, b, t) == (1, 2, 3)
+
+    def test_whitespace_and_negatives(self, monkeypatch):
+        """Should handle extra whitespace, zero, and negative numbers."""
+        monkeypatch.setattr("builtins.input", lambda _: "  -5   0   100  ")
+        g, b, t = input_gbt()
+        assert (g, b, t) == (-5, 0, 100)
+
+    def test_retry_on_invalid_part_count(self, monkeypatch):
+        """Should prompt again when fewer or more than 3 parts are provided."""
+        inputs = iter(["1 2", "1 2 3 4", "", "3 2 1"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        g, b, t = input_gbt()
+        assert (g, b, t) == (3, 2, 1)
+
+    def test_retry_on_value_error(self, monkeypatch):
+        """Should prompt again when non-integer values or floats are provided."""
+        inputs = iter(["a b c", "1.5 2 3", "1 2 three", "10 20 30"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        g, b, t = input_gbt()
+        assert (g, b, t) == (10, 20, 30)
