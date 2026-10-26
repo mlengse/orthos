@@ -1823,6 +1823,6 @@ if (require.main === module) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { makeFile, readFilePromise };
+    module.exports = { makeFile, readFilePromise, validateInputArgs };
 }
 
