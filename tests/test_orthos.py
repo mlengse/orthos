@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from orthos_colab import OrthosEngine, MAX_VAL, MAX_LEN, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF, input_gbt
+from orthos_colab import OrthosEngine, MAX_VAL, MAX_LEN, NO_HYF, IS_HYF, ERR_HYF, FOUND_HYF, input_gbt, input_int_pair
 
 
 @pytest.fixture
@@ -545,3 +545,75 @@ class TestInputGbt:
         monkeypatch.setattr("builtins.input", lambda _: next(inputs))
         g, b, t = input_gbt()
         assert (g, b, t) == (10, 20, 30)
+
+
+
+# ============================================================
+# Unit tests for input_int_pair helper function
+# ============================================================
+
+class TestInputIntPair:
+    """Unit tests for the CLI input helper function input_int_pair()."""
+
+    def test_valid_pair_single_line(self, monkeypatch):
+        """Should correctly parse two space-separated integers on a single line."""
+        monkeypatch.setattr("builtins.input", lambda _: "2 5")
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (2, 5)
+
+    def test_single_value_then_second_prompt(self, monkeypatch):
+        """Should prompt for second value when only one integer is entered first."""
+        inputs = iter(["3", "7"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (3, 7)
+
+    def test_out_of_bounds_retries(self, monkeypatch):
+        """Should reject values outside vmin/vmax and prompt again."""
+        inputs = iter(["0 5", "2 15", "1 10"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (1, 10)
+
+    def test_value_error_retries(self, monkeypatch):
+        """Should handle non-integer input gracefully and prompt again."""
+        inputs = iter(["foo bar", "2 baz", "4 8"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (4, 8)
+
+
+
+# ============================================================
+# Unit tests for input_int_pair helper function
+# ============================================================
+
+class TestInputIntPair:
+    """Unit tests for the CLI input helper function input_int_pair()."""
+
+    def test_valid_pair_single_line(self, monkeypatch):
+        """Should correctly parse two space-separated integers on a single line."""
+        monkeypatch.setattr("builtins.input", lambda _: "2 5")
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (2, 5)
+
+    def test_single_value_then_second_prompt(self, monkeypatch):
+        """Should prompt for second value when only one integer is entered first."""
+        inputs = iter(["3", "7"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (3, 7)
+
+    def test_out_of_bounds_retries(self, monkeypatch):
+        """Should reject values outside vmin/vmax and prompt again."""
+        inputs = iter(["0 5", "2 15", "1 10"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (1, 10)
+
+    def test_value_error_retries(self, monkeypatch):
+        """Should handle non-integer input gracefully and prompt again."""
+        inputs = iter(["foo bar", "2 baz", "4 8"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (4, 8)
