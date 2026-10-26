@@ -1070,19 +1070,34 @@ class OrthosEngine:
             f.write("}\n")
 
     def _collect_patterns(self, s, prefix, patterns_list):
-        for c in range(self.cmin, self.cmax + 1):
+        if isinstance(prefix, list):
+            prefix = ''.join(self.xext[ch] if ch < len(self.xext) else '?' for ch in prefix)
+
+        trie_len = len(self.trie_c)
+        xext = self.xext
+        len_xext = len(xext)
+        trie_c = self.trie_c
+        trie_r = self.trie_r
+        trie_l = self.trie_l
+        ops_val = self.ops_val
+        ops_dot = self.ops_dot
+        ops_op = self.ops_op
+        cmin = self.cmin
+        cmax = self.cmax
+
+        for c in range(cmin, cmax + 1):
             t = s + c
-            if t < len(self.trie_c) and self.trie_c[t] == c:
-                new_prefix = prefix + [c]
-                h = int(self.trie_r[t])
+            if t < trie_len and trie_c[t] == c:
+                ch_str = xext[c] if c < len_xext else '?'
+                new_prefix = prefix + ch_str
+                h = int(trie_r[t])
                 while h > 0:
-                    val = self.ops_val[h]
-                    dot = self.ops_dot[h]
-                    if val > 0 and val < MAX_VAL:
-                        pat_str = ''.join(self.xext[ch] if ch < len(self.xext) else '?' for ch in new_prefix)
-                        patterns_list.append((pat_str, val, dot))
-                    h = self.ops_op[h]
-                child = int(self.trie_l[t])
+                    val = ops_val[h]
+                    dot = ops_dot[h]
+                    if 0 < val < MAX_VAL:
+                        patterns_list.append((new_prefix, val, dot))
+                    h = ops_op[h]
+                child = int(trie_l[t])
                 if child > 0:
                     self._collect_patterns(child, new_prefix, patterns_list)
 
