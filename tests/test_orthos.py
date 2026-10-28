@@ -561,39 +561,9 @@ class TestInputIntPair:
         n1, n2 = input_int_pair("prompt", 1, 10)
         assert (n1, n2) == (2, 5)
 
-    def test_single_value_then_second_prompt(self, monkeypatch):
-        """Should prompt for second value when only one integer is entered first."""
-        inputs = iter(["3", "7"])
-        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-        n1, n2 = input_int_pair("prompt", 1, 10)
-        assert (n1, n2) == (3, 7)
-
-    def test_out_of_bounds_retries(self, monkeypatch):
-        """Should reject values outside vmin/vmax and prompt again."""
-        inputs = iter(["0 5", "2 15", "1 10"])
-        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-        n1, n2 = input_int_pair("prompt", 1, 10)
-        assert (n1, n2) == (1, 10)
-
-    def test_value_error_retries(self, monkeypatch):
-        """Should handle non-integer input gracefully and prompt again."""
-        inputs = iter(["foo bar", "2 baz", "4 8"])
-        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-        n1, n2 = input_int_pair("prompt", 1, 10)
-        assert (n1, n2) == (4, 8)
-
-
-
-# ============================================================
-# Unit tests for input_int_pair helper function
-# ============================================================
-
-class TestInputIntPair:
-    """Unit tests for the CLI input helper function input_int_pair()."""
-
-    def test_valid_pair_single_line(self, monkeypatch):
-        """Should correctly parse two space-separated integers on a single line."""
-        monkeypatch.setattr("builtins.input", lambda _: "2 5")
+    def test_more_than_two_values_single_line(self, monkeypatch):
+        """Should take the first two integers when more than two are provided."""
+        monkeypatch.setattr("builtins.input", lambda _: "2 5 8 10")
         n1, n2 = input_int_pair("prompt", 1, 10)
         assert (n1, n2) == (2, 5)
 
@@ -604,16 +574,35 @@ class TestInputIntPair:
         n1, n2 = input_int_pair("prompt", 1, 10)
         assert (n1, n2) == (3, 7)
 
-    def test_out_of_bounds_retries(self, monkeypatch):
-        """Should reject values outside vmin/vmax and prompt again."""
+    def test_empty_line_retries(self, monkeypatch):
+        """Should continue looping on empty input lines until valid integers are provided."""
+        inputs = iter(["", "   ", "4 6"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (4, 6)
+
+    def test_boundary_values_exact(self, monkeypatch):
+        """Should accept values that are exactly equal to vmin and vmax."""
+        monkeypatch.setattr("builtins.input", lambda _: "1 10")
+        n1, n2 = input_int_pair("prompt", 1, 10)
+        assert (n1, n2) == (1, 10)
+
+    def test_out_of_bounds_retries(self, monkeypatch, capsys):
+        """Should reject values outside vmin/vmax, print warning, and prompt again."""
         inputs = iter(["0 5", "2 15", "1 10"])
         monkeypatch.setattr("builtins.input", lambda _: next(inputs))
         n1, n2 = input_int_pair("prompt", 1, 10)
         assert (n1, n2) == (1, 10)
 
-    def test_value_error_retries(self, monkeypatch):
-        """Should handle non-integer input gracefully and prompt again."""
-        inputs = iter(["foo bar", "2 baz", "4 8"])
+        captured = capsys.readouterr()
+        assert "Values must be between 1 and 10" in captured.out
+
+    def test_value_error_retries(self, monkeypatch, capsys):
+        """Should handle non-integer input gracefully, print 'Invalid input.', and prompt again."""
+        inputs = iter(["foo bar", "2.5 5", "2 baz", "4 8"])
         monkeypatch.setattr("builtins.input", lambda _: next(inputs))
         n1, n2 = input_int_pair("prompt", 1, 10)
         assert (n1, n2) == (4, 8)
+
+        captured = capsys.readouterr()
+        assert "Invalid input." in captured.out
