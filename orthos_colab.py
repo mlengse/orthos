@@ -1111,7 +1111,8 @@ class OrthosEngine:
         word_str = ".foobar."
         word_ints = [self.xint[ord(c)] for c in word_str]
 
-        self.words = np.array([word_ints + [0]*(MAX_LEN-len(word_ints))], dtype=np.uint32, order='F')
+        self.words = np.zeros((1, MAX_LEN), dtype=np.uint32, order='F')
+        self.words[0, :len(word_ints)] = word_ints
         self.word_lens = np.array([len(word_ints)], dtype=np.int32)
 
         # Initialize dots: All NO_HYF except at 'o' (index 3) which means hyphen AFTER 'o' (before 'b')
