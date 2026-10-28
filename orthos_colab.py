@@ -868,16 +868,14 @@ class OrthosEngine:
         diff = sorted_patterns[1:] != sorted_patterns[:-1]
         boundaries = cp.any(diff, axis=1)
 
-        run_ids = cp.zeros(len(sorted_patterns), dtype=cp.int32)
-        run_ids[1:] = cp.cumsum(boundaries)
-
-        num_unique = int(run_ids[-1]) + 1
-        unique_weights = cp.zeros((num_unique, 2), dtype=cp.float32)
-        cp.add.at(unique_weights, run_ids, sorted_weights)
-
         change_points = cp.flatnonzero(boundaries) + 1
-        unique_indices = cp.concatenate((cp.array([0]), change_points))
+        unique_indices = cp.concatenate((cp.array([0], dtype=cp.int32), change_points.astype(cp.int32, copy=False)))
+        num_unique = len(unique_indices)
+
         unique_patterns_arr = sorted_patterns[unique_indices]
+
+        # Fast candidate weight aggregation (cp.add.reduceat replaces slow cp.add.at and cp.cumsum)
+        unique_weights = cp.add.reduceat(sorted_weights, unique_indices, axis=0)
 
         # Transfer back to CPU
         cpu_weights = unique_weights.get()
